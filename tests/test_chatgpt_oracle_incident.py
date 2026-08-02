@@ -26,9 +26,12 @@ def write_run(
     *,
     status: str,
     stdout: str = "",
+    stderr: str = "",
     output: str | None = None,
     session_authority: str = "",
     terminal_harvested: bool = False,
+    attachments: list[dict] | None = None,
+    conversation_url: str = "https://chatgpt.com/c/exact",
 ) -> Path:
     run_dir = root / "projects" / "projectkey" / "runs" / run_id
     run_dir.mkdir(parents=True, exist_ok=True)
@@ -37,8 +40,10 @@ def write_run(
     output_path = run_dir / "output.md"
     if output is not None:
         output_path.write_text(output, encoding="utf-8")
-    (run_dir / "stdout.log").write_text(stdout, encoding="utf-8")
-    (run_dir / "stderr.log").write_text("", encoding="utf-8")
+    stdout_path = run_dir / "stdout.log"
+    stderr_path = run_dir / "stderr.log"
+    stdout_path.write_text(stdout, encoding="utf-8")
+    stderr_path.write_text(stderr, encoding="utf-8")
     (run_dir / "state.json").write_text(json.dumps({
         "schema": "codex.chatgpt.oracle-run-state/v1",
         "status": status,
@@ -46,8 +51,13 @@ def write_run(
         "project_root": str(project_root),
         "session_authority": session_authority,
         "terminal_harvested": terminal_harvested,
-        "artifacts": {"output": str(output_path)},
-        "oracle": {"slug": "oracle-project-abc", "conversation_url": "https://chatgpt.com/c/exact"},
+        "attachments": attachments or [],
+        "artifacts": {
+            "output": str(output_path),
+            "stdout": str(stdout_path),
+            "stderr": str(stderr_path),
+        },
+        "oracle": {"slug": "oracle-project-abc", "conversation_url": conversation_url},
     }), encoding="utf-8")
     return run_dir
 
@@ -70,6 +80,31 @@ def test_packet_carries_exact_run_bucket_and_evidence(tmp_path: Path) -> None:
     assert packet["conversation_url"] == "https://chatgpt.com/c/exact"
     assert packet["safe_for_fresh_run"] is True
     assert str(run_dir / "state.json") in packet["evidence_paths"]
+
+
+def test_packet_marks_oversized_attachment_preflight_as_safe_no_submission(tmp_path: Path) -> None:
+    module = load()
+    run_dir = write_run(
+        tmp_path,
+        "oversized",
+        status="attention_required",
+        stdout="oracle 0.16.1\n",
+        stderr="The following files exceed the 1 MB limit:\n- packet.zip (7.2 MB)\n",
+        session_authority="submitted_unknown",
+        attachments=[{
+            "path": str(tmp_path / "packet.zip"),
+            "sha256": "a" * 64,
+            "size_bytes": 1024 * 1024 + 1,
+        }],
+        conversation_url="",
+    )
+
+    packet = module.build_packet(run_dir)
+
+    assert packet["bucket"] == "pre-submit-host-environment"
+    assert packet["signature"] == "oracle-attachment-size-preflight-rejected"
+    assert packet["safe_for_fresh_run"] is True
+    assert packet["unresolved_owners"] == []
 
 
 def test_packet_never_marks_fresh_run_safe_while_another_session_owns_project(tmp_path: Path) -> None:

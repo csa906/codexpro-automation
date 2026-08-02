@@ -24,17 +24,22 @@ def write_run(
     *,
     status: str,
     stdout: str = "",
+    stderr: str = "",
     output: str | None = None,
     session_authority: str = "",
     terminal_harvested: bool = False,
     task_outcome: str = "",
+    attachments: list[dict] | None = None,
 ) -> Path:
     run_dir = state_root / "projects" / "projectkey" / "runs" / run_id
     run_dir.mkdir(parents=True, exist_ok=True)
     output_path = run_dir / "output.md"
     if output is not None:
         output_path.write_text(output, encoding="utf-8")
-    (run_dir / "stdout.log").write_text(stdout, encoding="utf-8")
+    stdout_path = run_dir / "stdout.log"
+    stderr_path = run_dir / "stderr.log"
+    stdout_path.write_text(stdout, encoding="utf-8")
+    stderr_path.write_text(stderr, encoding="utf-8")
     (run_dir / "state.json").write_text(json.dumps({
         "schema": "codex.chatgpt.oracle-run-state/v1",
         "status": status,
@@ -43,7 +48,12 @@ def write_run(
         "session_authority": session_authority,
         "terminal_harvested": terminal_harvested,
         "task_outcome": task_outcome,
-        "artifacts": {"output": str(output_path)},
+        "attachments": attachments or [],
+        "artifacts": {
+            "output": str(output_path),
+            "stdout": str(stdout_path),
+            "stderr": str(stderr_path),
+        },
     }), encoding="utf-8")
     return run_dir
 
@@ -105,6 +115,34 @@ def test_pre_submit_signature_outranks_post_submit_interpretation(tmp_path: Path
 
     assert run["bucket"] == "pre-submit-ui-contract"
     assert run["signature"] == "app-mention-suggestion-absent"
+
+
+def test_attachment_size_preflight_proof_outranks_uncertain_session_authority(tmp_path: Path) -> None:
+    module = load()
+    state_root = tmp_path / "oracle-state"
+    write_run(
+        state_root,
+        "oversized",
+        status="attention_required",
+        stdout="oracle 0.16.1\n",
+        stderr="The following files exceed the 1 MB limit:\n- packet.zip (7.2 MB)\n",
+        session_authority="submitted_unknown",
+        attachments=[{
+            "path": str(tmp_path / "packet.zip"),
+            "sha256": "a" * 64,
+            "size_bytes": 1024 * 1024 + 1,
+        }],
+    )
+
+    report = module.diagnose(state_root)
+    run = report["unresolved_runs"][0]
+
+    assert run["bucket"] == "pre-submit-host-environment"
+    assert run["signature"] == "oracle-attachment-size-preflight-rejected"
+    assert report["safe_for_fresh_run_buckets"] == [
+        "pre-submit-host-environment",
+        "pre-submit-ui-contract",
+    ]
 
 
 def test_durable_terminal_run_is_complete_and_not_executed_is_separated(tmp_path: Path) -> None:

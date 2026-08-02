@@ -114,6 +114,16 @@ def duplicate_prompt_popen(command, **kwargs):
     return Process(1, [])
 
 
+def attachment_size_popen(command, **kwargs):
+    kwargs["stdout"].write(b"oracle 0.16.1\n")
+    kwargs["stdout"].flush()
+    kwargs["stderr"].write(
+        b"The following files exceed the 1 MB limit:\n- packet.zip (1.1 MB)\n"
+    )
+    kwargs["stderr"].flush()
+    return Process(1, [])
+
+
 def test_dry_run_never_executes_and_has_no_file_flag(tmp_path: Path) -> None:
     runner = load_runner()
     calls = []
@@ -734,6 +744,33 @@ def test_oracle_global_prompt_duplicate_is_proven_pre_submit_and_releases_projec
     )
     assert second["ok"] is True
     assert launches
+
+
+def test_attachment_size_preflight_is_proven_pre_submit_and_releases_project(tmp_path: Path) -> None:
+    runner = load_runner()
+    manifest_path = pro_manifest(tmp_path, run_id="c" * 32)
+    (tmp_path / "packet.zip").write_bytes(
+        b"x" * (runner.STATE.ORACLE_ATTACHMENT_SIZE_LIMIT_BYTES + 1)
+    )
+
+    result = execute_run(
+        runner,
+        manifest_path,
+        run_factory=version_runner,
+        popen_factory=attachment_size_popen,
+    )
+    run_dir = Path(result["run_dir"])
+    state = runner.STATE.load_state(run_dir / "state.json")
+
+    assert result["status"] == "pre_submit_failed"
+    assert result["safe_for_fresh_run"] is True
+    assert state["session_authority"] == "pre_submit"
+    assert state["transport_status"] == "rejected_pre_submit"
+    assert state["pre_submit_failure"]["code"] == "ORACLE_ATTACHMENT_SIZE_PREFLIGHT_REJECTED"
+    assert runner.STATE.unresolved_project_sessions(
+        runner.STATE.load_manifest(manifest_path).run_root,
+        tmp_path,
+    ) == []
 
 
 def test_recovery_settles_legacy_duplicate_prompt_lock_without_oracle_call(tmp_path: Path) -> None:

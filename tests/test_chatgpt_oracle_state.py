@@ -416,6 +416,85 @@ def test_owned_live_session_stays_running_despite_local_failure(tmp_path: Path) 
     assert verdict == {"lifecycle": "running", "authority_source": "exact-session-ownership"}
 
 
+def test_oversized_attachment_preflight_is_proven_and_releases_project(tmp_path: Path) -> None:
+    state = load_state()
+    run_root = tmp_path / "runs"
+    run_dir = run_root / "oversized-run"
+    run_dir.mkdir(parents=True)
+    output = run_dir / "output.md"
+    stdout = run_dir / "stdout.log"
+    stderr = run_dir / "stderr.log"
+    stdout.write_text("oracle 0.16.1\n", encoding="utf-8")
+    stderr.write_text(
+        "The following files exceed the 1 MB limit:\n- packet.zip (7.2 MB)\n",
+        encoding="utf-8",
+    )
+    state_path = run_dir / "state.json"
+    state_path.write_text(json.dumps({
+        "schema": "codex.chatgpt.oracle-run-state/v1",
+        "run_id": run_dir.name,
+        "project_root": str(tmp_path),
+        "status": "attention_required",
+        "session_authority": "submitted_unknown",
+        "terminal_harvested": False,
+        "attachments": [{
+            "path": str(tmp_path / "packet.zip"),
+            "sha256": "a" * 64,
+            "size_bytes": state.ORACLE_ATTACHMENT_SIZE_LIMIT_BYTES + 1,
+        }],
+        "artifacts": {
+            "output": str(output),
+            "stdout": str(stdout),
+            "stderr": str(stderr),
+        },
+        "oracle": {"session_locator": "oracle-oversized-run"},
+    }), encoding="utf-8")
+
+    evidence = state.proven_pre_submit_attachment_size_failure(state_path)
+    assert evidence is not None
+    assert evidence["code"] == "ORACLE_ATTACHMENT_SIZE_PREFLIGHT_REJECTED"
+    assert evidence["output_absent"] is True
+    assert evidence["conversation_url_absent"] is True
+    assert evidence["oversized_attachments"][0]["size_bytes"] == 1024 * 1024 + 1
+
+    settled = state.settle_proven_pre_submit_failure(state_path)
+    assert settled is not None
+    assert settled["session_authority"] == "pre_submit"
+    assert settled["transport_status"] == "rejected_pre_submit"
+    assert settled["task_outcome_reason"] == "oracle-attachment-size-preflight-rejected"
+    assert state.unresolved_project_sessions(run_root, tmp_path) == []
+
+
+def test_attachment_size_text_without_matching_immutable_state_fails_closed(tmp_path: Path) -> None:
+    state = load_state()
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    stderr = run_dir / "stderr.log"
+    stderr.write_text(
+        "The following files exceed the 1 MB limit:\n- packet.zip (7.2 MB)\n",
+        encoding="utf-8",
+    )
+    state_path = run_dir / "state.json"
+    state_path.write_text(json.dumps({
+        "schema": "codex.chatgpt.oracle-run-state/v1",
+        "run_id": "undersized-run",
+        "project_root": str(tmp_path),
+        "status": "attention_required",
+        "session_authority": "submitted_unknown",
+        "attachments": [{
+            "path": str(tmp_path / "packet.zip"),
+            "sha256": "b" * 64,
+            "size_bytes": state.ORACLE_ATTACHMENT_SIZE_LIMIT_BYTES,
+        }],
+        "artifacts": {
+            "output": str(run_dir / "output.md"),
+            "stderr": str(stderr),
+        },
+    }), encoding="utf-8")
+
+    assert state.proven_pre_submit_attachment_size_failure(state_path) is None
+
+
 def test_not_executed_outcome_needs_attention_even_when_terminal(tmp_path: Path) -> None:
     state = load_state()
     output = tmp_path / "output.md"

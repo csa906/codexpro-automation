@@ -88,6 +88,8 @@ ORACLE_NO_SESSION_RE = re.compile(
 ORACLE_PROMPT_NOT_OBSERVED_MARKER = (
     "Prompt did not appear in conversation before timeout (send may have failed)"
 )
+ORACLE_ATTACHMENT_SIZE_PREFLIGHT_MARKER = "The following files exceed the 1 MB limit:"
+ORACLE_ATTACHMENT_SIZE_LIMIT_BYTES = 1024 * 1024
 ORACLE_NO_LIVE_TAB_MARKER = "No live ChatGPT tab matched session"
 ORACLE_NO_RECOVERABLE_URL_MARKER = (
     "session metadata has no recoverable ChatGPT conversation URL"
@@ -1107,9 +1109,65 @@ def proven_pre_submit_host_failure(state_path: Path) -> dict[str, Any] | None:
     }
 
 
+def proven_pre_submit_attachment_size_failure(state_path: Path) -> dict[str, Any] | None:
+    """Prove Oracle rejected an oversized attachment before browser submission."""
+    state = load_state(state_path)
+    authority = str(state.get("session_authority") or "")
+    if authority not in {"pre_submit", "submitted_unknown"}:
+        return None
+    if _state_has_conversation_url(state):
+        return None
+    artifacts = state.get("artifacts") if isinstance(state.get("artifacts"), dict) else {}
+    output = Path(str(artifacts.get("output") or ""))
+    if str(output) and output_is_nonempty(output):
+        return None
+    stderr_record = _artifact_bytes(state, "stderr")
+    if stderr_record is None:
+        return None
+    _, stderr_bytes = stderr_record
+    try:
+        stderr_text = stderr_bytes.decode("utf-8", errors="strict")
+    except UnicodeDecodeError:
+        return None
+    if ORACLE_ATTACHMENT_SIZE_PREFLIGHT_MARKER not in stderr_text:
+        return None
+    attachments = state.get("attachments") if isinstance(state.get("attachments"), list) else []
+    oversized: list[dict[str, Any]] = []
+    for item in attachments:
+        if not isinstance(item, dict):
+            continue
+        try:
+            size_bytes = int(item.get("size_bytes") or 0)
+        except (TypeError, ValueError):
+            continue
+        path = str(item.get("path") or "")
+        if (
+            size_bytes > ORACLE_ATTACHMENT_SIZE_LIMIT_BYTES
+            and path
+            and Path(path).name in stderr_text
+        ):
+            oversized.append({
+                "path": path,
+                "sha256": str(item.get("sha256") or ""),
+                "size_bytes": size_bytes,
+            })
+    if not oversized:
+        return None
+    return {
+        "schema": "codex.chatgpt.oracle-pre-submit-attachment-size-failure/v1",
+        "code": "ORACLE_ATTACHMENT_SIZE_PREFLIGHT_REJECTED",
+        "stderr_sha256": hashlib.sha256(stderr_bytes).hexdigest(),
+        "output_absent": True,
+        "conversation_url_absent": True,
+        "limit_bytes": ORACLE_ATTACHMENT_SIZE_LIMIT_BYTES,
+        "oversized_attachments": oversized,
+    }
+
+
 def proven_pre_submit_failure(state_path: Path) -> dict[str, Any] | None:
     return (
         proven_pre_submit_rejection(state_path)
+        or proven_pre_submit_attachment_size_failure(state_path)
         or proven_pre_submit_host_failure(state_path)
         or proven_user_confirmed_no_submission(state_path)
     )
@@ -1144,9 +1202,15 @@ def settle_proven_pre_submit_failure(state_path: Path) -> dict[str, Any] | None:
     confirmed = proven_user_confirmed_no_submission(state_path)
     if confirmed is not None:
         return load_state(state_path)
-    evidence = proven_pre_submit_host_failure(state_path)
+    evidence = (
+        proven_pre_submit_attachment_size_failure(state_path)
+        or proven_pre_submit_host_failure(state_path)
+    )
     if evidence is None:
         return None
+    attachment_size_rejection = (
+        evidence.get("code") == "ORACLE_ATTACHMENT_SIZE_PREFLIGHT_REJECTED"
+    )
     payload = load_state(state_path)
     payload.update({
         "status": "attention_required",
@@ -1154,9 +1218,15 @@ def settle_proven_pre_submit_failure(state_path: Path) -> dict[str, Any] | None:
         "session_authority": "pre_submit",
         "terminal_harvested": False,
         "artifact_sha256": None,
-        "transport_status": "failed_pre_submit",
+        "transport_status": (
+            "rejected_pre_submit" if attachment_size_rejection else "failed_pre_submit"
+        ),
         "task_outcome": "pending",
-        "task_outcome_reason": "prelaunch-host-failure",
+        "task_outcome_reason": (
+            "oracle-attachment-size-preflight-rejected"
+            if attachment_size_rejection
+            else "prelaunch-host-failure"
+        ),
         "pre_submit_failure": evidence,
     })
     write_json_atomic(state_path, payload)

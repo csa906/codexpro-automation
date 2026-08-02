@@ -89,6 +89,7 @@ def build_packet(run_dir: Path, *, reporter_role: str = REPORTER_ROLE) -> dict[s
         user_confirmed_no_submission=(
             STATE.proven_user_confirmed_no_submission(state_path) is not None
         ),
+        proven_pre_submit_failure=STATE.proven_pre_submit_failure(state_path),
     )
     lifecycle = STATE.resolve_lifecycle(
         state, output_is_present=DIAGNOSE._output_is_nonempty(output_path)

@@ -77,6 +77,21 @@ SIGNATURE_RULES: tuple[tuple[str, str, str], ...] = (
     ),
 )
 
+PROVEN_PRE_SUBMIT_SIGNATURES = {
+    "ORACLE_ATTACHMENT_SIZE_PREFLIGHT_REJECTED": (
+        PRE_SUBMIT_HOST,
+        "oracle-attachment-size-preflight-rejected",
+    ),
+    "ORACLE_VERSION_RESOLUTION_PRELAUNCH_FAILED": (
+        PRE_SUBMIT_HOST,
+        "oracle-version-resolution-prelaunch-failed",
+    ),
+    "ORACLE_GLOBAL_PROMPT_DUPLICATE": (
+        PRE_SUBMIT_HOST,
+        "oracle-global-prompt-duplicate",
+    ),
+}
+
 REMEDIATION = {
     PRE_SUBMIT_HOST: "Fix the local launch contract; no web submission occurred, so a fresh run is safe.",
     PRE_SUBMIT_UI: "Relax or realign the ChatGPT UI contract; no web submission occurred, so a fresh run is safe.",
@@ -113,6 +128,7 @@ def classify_run(
     has_output: bool,
     transcript_text: str = "",
     user_confirmed_no_submission: bool = False,
+    proven_pre_submit_failure: dict[str, Any] | None = None,
 ) -> dict[str, str]:
     """Return the bucket and signature for one persisted run.
 
@@ -126,6 +142,13 @@ def classify_run(
     verdict = STATE.resolve_lifecycle(state, output_is_present=has_output)
     lifecycle = str(verdict["lifecycle"])
     source = str(verdict["authority_source"])
+
+    if proven_pre_submit_failure is not None:
+        code = str(proven_pre_submit_failure.get("code") or "")
+        classified = PROVEN_PRE_SUBMIT_SIGNATURES.get(code)
+        if classified is not None:
+            bucket, signature = classified
+            return {"bucket": bucket, "signature": signature}
 
     if lifecycle == "complete":
         if source == "exact-terminal-evidence":
@@ -194,6 +217,9 @@ def diagnose(state_root: Path | None = None) -> dict[str, Any]:
             transcript_text=_read_text(run_dir / "transcript.md"),
             user_confirmed_no_submission=(
                 STATE.proven_user_confirmed_no_submission(run_dir / "state.json") is not None
+            ),
+            proven_pre_submit_failure=STATE.proven_pre_submit_failure(
+                run_dir / "state.json"
             ),
         )
         runs.append({
