@@ -184,10 +184,44 @@ def wait_for_oracle_process(process: Any, watchdog_timeout_seconds: float | None
         return None, True
 
 
-def resolve_oracle_version(command: Sequence[str], *, run_factory=subprocess.run, platform_name: str | None = None) -> str:
+def isolated_oracle_environment(
+    base_env: dict[str, str],
+    command: Sequence[str],
+    *,
+    npm_prefix: Path,
+) -> dict[str, str]:
+    """Keep npx Oracle resolution independent of an installed global package."""
+    env = dict(base_env)
+    executable = Path(command[0]).name.casefold() if command else ""
+    if executable not in {"npx", "npx.cmd", "npx.exe"}:
+        return env
+    prefix = npm_prefix.expanduser().resolve()
+    state_root = STATE.oracle_state_root()
+    if not STATE.is_within(state_root, prefix):
+        raise OracleRunError(
+            "ORACLE_NPM_PREFIX_OUTSIDE_HOST_STATE",
+            "isolated Oracle npm prefix must remain inside host-only Oracle state",
+            {"prefix": str(prefix), "state_root": str(state_root)},
+        )
+    prefix.mkdir(parents=True, exist_ok=True)
+    for key in tuple(env):
+        if key.casefold() == "npm_config_prefix":
+            del env[key]
+    env["npm_config_prefix"] = str(prefix)
+    return env
+
+
+def resolve_oracle_version(
+    command: Sequence[str],
+    *,
+    run_factory=subprocess.run,
+    platform_name: str | None = None,
+    env: dict[str, str] | None = None,
+) -> str:
     completed = run_factory(
         [*command, "--version"],
         cwd=None,
+        env=env,
         stdin=subprocess.DEVNULL,
         capture_output=True,
         text=True,
@@ -332,12 +366,21 @@ def execute_run(
     STATE.write_json_atomic(layout.state_path, STATE.state_payload(config, layout, status="prepared", resolved_version="unresolved"))
     layout.stdout_path.touch()
     layout.stderr_path.touch()
-    oracle_env = STATE.browser_temp_environment(layout.browser_temp_path, platform_name=platform_name)
+    oracle_env = isolated_oracle_environment(
+        STATE.browser_temp_environment(layout.browser_temp_path, platform_name=platform_name),
+        config.oracle_command,
+        npm_prefix=layout.run_dir / "npm-prefix",
+    )
     exit_code: int | None = None
     watchdog_expired = False
     oracle_process_pid: int | None = None
     try:
-        version = resolve_oracle_version(config.oracle_command, run_factory=run_factory, platform_name=platform_name)
+        version = resolve_oracle_version(
+            config.oracle_command,
+            run_factory=run_factory,
+            platform_name=platform_name,
+            env=oracle_env,
+        )
         compat_factory(version)
         if config.transport == "devspace":
             devspace_compat = devspace_compat_factory()
@@ -637,7 +680,11 @@ def _recover_run_locked(
     stdout_path = directory / f"recovery-{action}-stdout.log"
     stderr_path = directory / f"recovery-{action}-stderr.log"
     recovery_browser_temp = directory / f"recovery-{action}-browser-temp"
-    recovery_env = STATE.browser_temp_environment(recovery_browser_temp, platform_name=platform_name)
+    recovery_env = isolated_oracle_environment(
+        STATE.browser_temp_environment(recovery_browser_temp, platform_name=platform_name),
+        command,
+        npm_prefix=directory / "npm-prefix",
+    )
     try:
         with stdout_path.open("wb") as stdout_handle, stderr_path.open("wb") as stderr_handle:
             process = popen_factory(

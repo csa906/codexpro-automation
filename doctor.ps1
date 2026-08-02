@@ -114,9 +114,10 @@ if (Test-Path -LiteralPath $UpdateReceiptPath) {
   }
 }
 
-if (!$Python -or !(Test-Path -LiteralPath $Contract)) {
-  $Issues += @{code='CONTRACT_UNVERIFIED'; detail='Python or contract manifest unavailable'}
-} else {
+$LegacyContractPresent = [bool]$Agbrowse -or [bool]$UpdateReceipt -or (Test-Path -LiteralPath $Contract)
+if ($LegacyContractPresent -and (!$Python -or !(Test-Path -LiteralPath $Contract))) {
+  $Issues += @{code='CONTRACT_UNVERIFIED'; detail='Installed legacy agbrowse cannot be contract-verified'}
+} elseif ($LegacyContractPresent) {
   if ($UpdateReceipt -and (Get-Sha256 $Contract) -ne [string]$UpdateReceipt.contract_sha256) {
     $Issues += @{code='CONTRACT_RECEIPT_HASH_MISMATCH'; contract=$Contract}
   } else {
@@ -156,7 +157,7 @@ if (!$Python -or !(Test-Path -LiteralPath $Contract)) {
   warnings = $Warnings
   commands = $Commands
   agbrowse = @{selected_version=$SelectedVersion; contract=$Contract; update_receipt=$UpdateReceiptPath}
-  oracle = @{package='@steipete/oracle';tested_version='0.16.1';resolution='npx at explicit run time'}
+  oracle = @{package='@steipete/oracle';tested_version='0.16.1';resolution='npx with a per-run isolated npm prefix'}
   devspace = @{package='@waishnav/devspace';tested_version='1.0.4';setup='explicit setup skill only'}
   codexpro = @{
     installation = 'external'

@@ -13,6 +13,7 @@
     "bin/chatgpt_devspace_compat.py",
     "bin/devspace-compat/1.0.4/workspaces.patch",
     "bin/chatgpt_oracle_compat.py",
+    "bin/oracle-compat/0.16.1/assistantResponse.patch",
     "bin/oracle-compat/0.16.1/browserConfig.patch",
     "bin/oracle-compat/0.16.1/browserIndex.patch",
     "bin/oracle-compat/0.16.1/chromeLifecycle.patch",
