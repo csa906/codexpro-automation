@@ -78,12 +78,30 @@ def test_pro_requires_an_evidence_based_web_multi_decision_and_auto_handoff() ->
 
 def test_deep_research_uses_oracle_deep_without_silent_fallback() -> None:
     value = text(RESEARCH)
+    flat = " ".join(value.split())
     assert "chatgpt_oracle_dispatch.py" in value
     assert "--mode deep-research" in value
     assert "--browser-research deep" in value
     assert '--reasoning-level "Very High"' in value
-    assert "visible `Extra High`" in value
+    assert "Oracle `extra-high`" in value
+    assert "skips generic thinking-time selection" in value
+    assert "Deep Research owns its effort flow" in flat
+    assert "do not claim a visible `Extra High` selection or verification" in flat
     assert "Do not silently replace Deep Research" in value
+
+
+def test_regular_oracle_routes_use_extra_high_and_reserve_heavy_for_pro() -> None:
+    runtime = text(ORACLE)
+    routing = text(ROOT / "docs" / "GLOBAL_CHATGPT_ROUTING.md")
+    for value in (runtime, routing):
+        flat = " ".join(value.split())
+        assert "Oracle `extra-high`" in value
+        assert "visible `Extra High`" in value
+        assert "Power 4/5" in value
+        assert "Power 5/5" in value
+        assert "`heavy` is a compatibility token reserved for" in flat
+        assert "`GPT-5.6 Sol` Power 5/5 Pro" in flat
+        assert "Regular routes select `GPT-5.6 Sol` with `heavy`" not in value
 
 
 def test_web_multi_is_genuine_sessions_with_wave_cap_and_worktrees() -> None:

@@ -105,9 +105,9 @@ ORACLE_CDP_DISCONNECT_PRE_SUBMIT_ERROR = (
     "Chrome DevTools client disconnected before oracle finished; "
     "the browser target appears still alive."
 )
-ORACLE_STANDALONE_PRO_NO_SUBMISSION_VERSIONS = {"0.17.1"}
 ORACLE_CUSTOM_PACKAGE_VERSION = "0.17.1-custom.10"
-ORACLE_CUSTOM_CLI_RELATIVE = Path("mcp_servers/oracle-0.17.1/node_modules/.bin/oracle.cmd")
+ORACLE_STANDALONE_PRO_NO_SUBMISSION_VERSIONS = {ORACLE_CUSTOM_PACKAGE_VERSION}
+ORACLE_CUSTOM_CLI_DIRECTORY = Path("mcp_servers/oracle-0.17.1/node_modules/.bin")
 USER_CONFIRMED_NO_SUBMISSION = "user-confirmed-no-submission"
 USER_CONFIRMED_EXECUTION_ENDED = "user-confirmed-task-ended"
 ORACLE_RECOVERY_STATE_RE = re.compile(r"(?im)^\s*State:\s*[a-z][a-z0-9_-]*\s*$")
@@ -300,10 +300,8 @@ def oracle_state_root() -> Path:
 def custom_oracle_cli_path(platform_name: str | None = None) -> Path | None:
     """Return the exact installed custom Oracle CLI when its package identity matches."""
     platform = os.name if platform_name is None else platform_name
-    if platform != "nt":
-        return None
     codex_home = Path(os.environ.get("CODEX_HOME") or (Path.home() / ".codex")).expanduser().resolve()
-    cli = (codex_home / ORACLE_CUSTOM_CLI_RELATIVE).resolve()
+    cli = (codex_home / ORACLE_CUSTOM_CLI_DIRECTORY / ("oracle.cmd" if platform == "nt" else "oracle")).resolve()
     package = (codex_home / "mcp_servers/oracle-0.17.1/node_modules/@steipete/oracle/package.json").resolve()
     try:
         payload = json.loads(package.read_text(encoding="utf-8"))
@@ -321,25 +319,38 @@ def default_oracle_command(platform_name: str | None = None) -> tuple[str, ...]:
     custom_cli = custom_oracle_cli_path(platform)
     if custom_cli is not None:
         return (str(custom_cli),)
-    return ("npx.cmd" if platform == "nt" else "npx", "-y", "@steipete/oracle@0.17.1")
+    raise OracleStateError(
+        "ORACLE_CUSTOM_CLI_UNAVAILABLE",
+        f"new Oracle runs require the colocated Oracle {ORACLE_CUSTOM_PACKAGE_VERSION} CLI",
+        {"relative_cli": str(ORACLE_CUSTOM_CLI_DIRECTORY / ("oracle.cmd" if platform == "nt" else "oracle"))},
+    )
 
 
-def validate_oracle_command(values: Any) -> tuple[str, ...]:
+def validate_oracle_command(
+    values: Any,
+    *,
+    platform_name: str | None = None,
+    allow_legacy_recovery: bool = False,
+) -> tuple[str, ...]:
     if not isinstance(values, list) or not values or not all(isinstance(item, str) and item for item in values):
         raise OracleStateError("ORACLE_COMMAND_INVALID", "oracle_command must be a nonempty list of strings")
     command = tuple(values)
-    executable = Path(command[0]).name.casefold()
-    if executable in {"oracle", "oracle.cmd", "oracle.exe"} and len(command) == 1:
+    custom_cli = custom_oracle_cli_path(platform_name)
+    try:
+        is_exact_custom_cli = (
+            len(command) == 1
+            and custom_cli is not None
+            and Path(command[0]).expanduser().resolve() == custom_cli
+        )
+    except OSError:
+        is_exact_custom_cli = False
+    if is_exact_custom_cli:
         return command
-    if executable in {"npx", "npx.cmd", "npx.exe"} and command[1:] in {
-        ("-y", "@steipete/oracle@0.17.1"),
-        ("--yes", "@steipete/oracle@0.17.1"),
-        ("@steipete/oracle@0.17.1",),
-    }:
+    if allow_legacy_recovery:
         return command
     raise OracleStateError(
         "ORACLE_COMMAND_FORBIDDEN",
-        "oracle_command must resolve directly to Oracle or npx @steipete/oracle@0.17.1",
+        f"new Oracle runs require the exact colocated Oracle {ORACLE_CUSTOM_PACKAGE_VERSION} CLI",
         {"command": command_for_display(command)},
     )
 
@@ -432,7 +443,7 @@ def load_manifest(path: Path, *, platform_name: str | None = None) -> OracleConf
     if command_value is None:
         oracle_command = default_oracle_command(platform_name)
     else:
-        oracle_command = validate_oracle_command(command_value)
+        oracle_command = validate_oracle_command(command_value, platform_name=platform_name)
     try:
         timeout = float(payload.get("submit_mutex_timeout_seconds", 30))
     except (TypeError, ValueError) as exc:
@@ -1715,7 +1726,7 @@ def proven_pre_submit_manual_login_profile_uninitialized(
         str(profile.get("model") or "") != "gpt-5.6-sol"
         or str(profile.get("model_strategy") or "") != "select"
         or str(profile.get("copy_profile") or "").strip()
-        or str(oracle.get("resolved_version") or "").removeprefix("oracle ").strip() != "0.17.1"
+        or str(oracle.get("resolved_version") or "").removeprefix("oracle ").strip() != ORACLE_CUSTOM_PACKAGE_VERSION
         or not locator
     ):
         return None
@@ -1780,7 +1791,7 @@ def proven_pre_submit_manual_login_profile_uninitialized(
     prefix_lines = lines[:-2]
     if len(prefix_lines) != 11:
         return None
-    banner_ok = bool(re.fullmatch(r".{1,4} oracle 0\.17\.1 .{2,120}", prefix_lines[0]))
+    banner_ok = bool(re.fullmatch(r".{1,4} oracle 0\.17\.1-custom\.10 .{2,120}", prefix_lines[0]))
     launch_ok = bool(
         re.fullmatch(
             r"Launching browser mode \(target=GPT-5\.6 Sol; requested=gpt-5\.6-sol\) "
@@ -1817,7 +1828,7 @@ def proven_pre_submit_manual_login_profile_uninitialized(
         "transcript_sha256": hashlib.sha256(transcript_bytes).hexdigest(),
         "output_absent": True,
         "conversation_url_absent": True,
-        "resolved_version": "0.17.1",
+        "resolved_version": ORACLE_CUSTOM_PACKAGE_VERSION,
         "oracle_locator": locator,
         "failure_reason": "oracle-manual-login-profile-uninitialized",
         "manual_login_profile": str(expected_profile),
@@ -1856,7 +1867,7 @@ def proven_pre_submit_cdp_disconnect(state_path: Path) -> dict[str, Any] | None:
         or str(profile.get("model_strategy") or "") != "select"
         or str(profile.get("thinking_time") or "") != "heavy"
         or copy_profile != expected_profile
-        or str(oracle.get("resolved_version") or "").removeprefix("oracle ").strip() != "0.17.1"
+        or str(oracle.get("resolved_version") or "").removeprefix("oracle ").strip() != ORACLE_CUSTOM_PACKAGE_VERSION
         or not locator
     ):
         return None
@@ -1899,7 +1910,7 @@ def proven_pre_submit_cdp_disconnect(state_path: Path) -> dict[str, Any] | None:
     if len(lines) != 13 or lines[-2:] != failure_lines:
         return None
     if not (
-        re.fullmatch(r".{1,4} oracle 0\.17\.1 .{2,120}", lines[0])
+        re.fullmatch(r".{1,4} oracle 0\.17\.1-custom\.10 .{2,120}", lines[0])
         and lines[1] == f"Session: {locator}"
         and lines[2:6]
         == [
@@ -1993,7 +2004,7 @@ def proven_pre_submit_cdp_disconnect(state_path: Path) -> dict[str, Any] | None:
         "output_absent": True,
         "conversation_url_absent": True,
         "prompt_submitted": False,
-        "resolved_version": "0.17.1",
+        "resolved_version": ORACLE_CUSTOM_PACKAGE_VERSION,
         "failure_reason": "oracle-cdp-client-disconnect-before-submit",
     }
 
@@ -2028,7 +2039,7 @@ def proven_pre_submit_host_failure(state_path: Path) -> dict[str, Any] | None:
     # Oracle prints this version banner before validating local attachments;
     # it is not browser/session evidence.  Any other stdout remains fail-closed.
     stdout_text = stdout_bytes.decode("utf-8", errors="replace").strip()
-    attachment_limit_banner_only = stdout_text == "🧿 oracle 0.17.1 — Questions in, clarity out."
+    attachment_limit_banner_only = stdout_text == "🧿 oracle 0.17.1-custom.10 — Questions in, clarity out."
     if stdout_text and not attachment_limit_banner_only:
         return None
     try:
@@ -2092,7 +2103,7 @@ def proven_pre_submit_copy_profile_manual_login_conflict(state_path: Path) -> di
     stderr_record = _artifact_bytes(state, "stderr")
     if (
         not copy_profile
-        or str(oracle.get("resolved_version") or "").removeprefix("oracle ").strip() != "0.17.1"
+        or str(oracle.get("resolved_version") or "").removeprefix("oracle ").strip() != ORACLE_CUSTOM_PACKAGE_VERSION
         or output_is_nonempty(output)
         or stdout_record is None
         or stderr_record is None
@@ -2133,7 +2144,7 @@ def proven_pre_submit_profile_copy_rsync_missing(state_path: Path) -> dict[str, 
     stderr_record = _artifact_bytes(state, "stderr")
     if (
         not copy_profile
-        or str(oracle.get("resolved_version") or "").removeprefix("oracle ").strip() != "0.17.1"
+        or str(oracle.get("resolved_version") or "").removeprefix("oracle ").strip() != ORACLE_CUSTOM_PACKAGE_VERSION
         or output_is_nonempty(output)
         or stdout_record is None
         or stderr_record is None

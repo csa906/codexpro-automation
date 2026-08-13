@@ -131,6 +131,10 @@ def onboarding_plan(
             "doctor": f"Verify that {registration_url} returns an OAuth challenge (normally HTTP 401).",
         }
     profile = str(Path.home() / ".oracle" / "browser-profile")
+    oracle_cli = str(
+        (Path(os.environ.get("CODEX_HOME") or (Path.home() / ".codex"))
+        / "mcp_servers/oracle-0.17.1/node_modules/.bin/oracle.cmd").resolve()
+    )
     stages = [
         {
             "id": "01_install",
@@ -179,9 +183,7 @@ def onboarding_plan(
             "complete_when": "the dedicated Oracle profile is signed in to ChatGPT once",
             "command": _quoted_command(
                 [
-                    "npx",
-                    "--yes",
-                    "@steipete/oracle@0.17.1",
+                    oracle_cli,
                     "--engine",
                     "browser",
                     "--browser-manual-login",
@@ -192,6 +194,7 @@ def onboarding_plan(
                     "HI",
                 ]
             ),
+            "route_rule": "new Oracle runs require the colocated 0.17.1-custom.10 CLI; public npx and bare oracle are forbidden",
         },
         {
             "id": "07_chatgpt_app",

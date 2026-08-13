@@ -155,10 +155,9 @@
     },
     "oracle": {
       "package": "@steipete/oracle",
-      "tested_version": "0.17.1",
+      "tested_version": "0.17.1-custom.10",
       "license": "MIT",
-      "integrity": "sha512-bq4SqMvRtT5Im+R57UPSXTV5p/BFTU24OXgGXqx2ckABWFX9uLDuKeJLoOdfBm7RzllrzjrlSSGgiMsrrvh+9Q==",
-      "installation": "resolved by the invoking agent through explicit npx @steipete/oracle@0.17.1; unknown versions and hash mismatches fail closed"
+      "installation": "colocated custom CLI/MCP at mcp_servers/oracle-0.17.1; it is not an npm tarball, so public npm integrity is inapplicable; new runs require its @steipete/oracle package identity to resolve exactly to 0.17.1-custom.10 and runtime patch hashes to match"
     },
     "devspace": {
       "package": "@waishnav/devspace",

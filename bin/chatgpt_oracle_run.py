@@ -257,12 +257,12 @@ def isolated_oracle_environment(
     return env
 
 
-def oracle_package_root(command: Sequence[str]) -> Path | None:
+def oracle_package_root(command: Sequence[str], *, platform_name: str | None = None) -> Path | None:
     """Resolve the package root for the exact versioned custom CLI path."""
     if not command:
         return None
     executable = Path(command[0]).expanduser().resolve()
-    expected = STATE.custom_oracle_cli_path("nt")
+    expected = STATE.custom_oracle_cli_path(platform_name)
     if expected is None or executable != expected:
         return None
     return expected.parent.parent / "@steipete" / "oracle"
@@ -297,6 +297,16 @@ def resolve_oracle_version(
     if not lines:
         raise OracleRunError("ORACLE_VERSION_EMPTY", "Oracle version command returned no version")
     return lines[0]
+
+
+def require_custom_oracle_version(resolved_version: str) -> None:
+    version = resolved_version.strip().removeprefix("oracle ").strip()
+    if version != STATE.ORACLE_CUSTOM_PACKAGE_VERSION:
+        raise OracleRunError(
+            "ORACLE_CUSTOM_VERSION_REQUIRED",
+            f"new Oracle runs require exact {STATE.ORACLE_CUSTOM_PACKAGE_VERSION}",
+            {"resolved": resolved_version, "required": STATE.ORACLE_CUSTOM_PACKAGE_VERSION},
+        )
 
 
 def dry_run_payload(config, layout, argv: Sequence[str], prompt: str) -> dict[str, Any]:
@@ -712,7 +722,8 @@ def execute_run(
             platform_name=platform_name,
             env=oracle_env,
         )
-        package_root = oracle_package_root(config.oracle_command)
+        require_custom_oracle_version(version)
+        package_root = oracle_package_root(config.oracle_command, platform_name=platform_name)
         if package_root is None:
             compat_factory(version)
         else:
@@ -1075,7 +1086,14 @@ def _recover_run_locked(
     if not STATE.is_within(STATE.oracle_state_root(), output_path):
         raise OracleRunError("RECOVERY_OUTPUT_OUTSIDE_HOST_STATE", "recovery output must remain inside host-only Oracle state")
     stored_command = oracle.get("command")
-    command = STATE.validate_oracle_command(list(oracle_command) if oracle_command is not None else stored_command)
+    # Persisted sessions may have been submitted before the custom.10-only
+    # new-run policy. Only their recorded command is recovery-only authority;
+    # a caller-supplied override must satisfy the current strict new-run route.
+    command = STATE.validate_oracle_command(
+        stored_command if oracle_command is None else list(oracle_command),
+        platform_name=platform_name,
+        allow_legacy_recovery=oracle_command is None,
+    )
     argv_output = directory / f"recovery-{action}-candidate.md"
     argv = recovery_argv(command, locator, action, argv_output)
     if dry_run:

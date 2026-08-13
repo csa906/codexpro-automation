@@ -185,11 +185,17 @@ python skills/chatgpt-workspace-setup/scripts/devspace_tailscale_setup.py doctor
 일상 Chrome 프로필이 아닌 Oracle 전용 프로필을 초기화합니다.
 
 ```powershell
-npx --yes @steipete/oracle@0.17.1 --engine browser `
+$codexHome = if ($env:CODEX_HOME) { $env:CODEX_HOME } else { Join-Path $env:USERPROFILE '.codex' }
+$oracle = Join-Path $codexHome 'mcp_servers/oracle-0.17.1/node_modules/.bin/oracle.cmd'
+& $oracle --engine browser `
   --browser-manual-login --browser-keep-browser `
   --browser-manual-login-profile-dir "$env:USERPROFILE\.oracle\browser-profile" `
   -p "HI"
 ```
+
+`$oracle`은 설치된 `@steipete/oracle` package version이 정확히
+`0.17.1-custom.10`인 colocated CLI여야 합니다. 새 실행에는 public `npx` 또는 bare
+`oracle`를 사용하지 않으며, 누락되거나 버전이 다르면 doctor와 새 실행이 fail closed합니다.
 
 열린 전용 브라우저에서 ChatGPT 로그인만 완료합니다. 이후 실제 실행은 이 프로필의
 throwaway copy를 사용하므로 동시 프로젝트가 같은 브라우저 상태를 공유하지 않습니다.

@@ -11,9 +11,11 @@ Use this routing in the Codex global `AGENTS.md` after installing the package.
 - New regular ChatGPT work, including direct, plan, review, edit,
   orchestrator, research, comprehensive, and Web Multi-GPT, uses Oracle plus
   the manually registered DevSpace app.
-- Regular web work selects `GPT-5.6 Sol` with Oracle `heavy` and verifies the
-  visible `Extra High` tier. It does not silently fall back to High or another
-  model.
+- Regular web work selects `GPT-5.6 Sol` with Oracle `extra-high`, verifies
+  the visible `Extra High` tier, and requires Power 4/5. `heavy` is a
+  compatibility token reserved for
+  `GPT-5.6 Sol` Power 5/5 Pro, never the regular thinking setting. It does not
+  silently fall back to High or another model.
 - The regular composer contains only `@DevSpace` and an absolute UTF-8 mission
   path. It does not attach the task body and does not inspect or mutate ChatGPT
   app settings per question.

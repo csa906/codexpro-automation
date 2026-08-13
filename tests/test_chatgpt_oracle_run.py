@@ -4,6 +4,7 @@ import importlib.util
 import hashlib
 import json
 import os
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -13,6 +14,23 @@ import pytest
 RUNNER_PATH = Path(__file__).resolve().parents[1] / "bin" / "chatgpt_oracle_run.py"
 
 
+@pytest.fixture(autouse=True)
+def installed_custom_oracle(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    codex_home = tmp_path / ".codex"
+    package_root = codex_home / "mcp_servers/oracle-0.17.1/node_modules/@steipete/oracle"
+    cli = codex_home / "mcp_servers/oracle-0.17.1/node_modules/.bin/oracle.cmd"
+    posix_cli = codex_home / "mcp_servers/oracle-0.17.1/node_modules/.bin/oracle"
+    package_root.mkdir(parents=True, exist_ok=True)
+    cli.parent.mkdir(parents=True, exist_ok=True)
+    cli.write_text("@echo off\n", encoding="utf-8")
+    posix_cli.write_text("#!/bin/sh\n", encoding="utf-8")
+    (package_root / "package.json").write_text(
+        json.dumps({"name": "@steipete/oracle", "version": "0.17.1-custom.10"}),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("CODEX_HOME", str(codex_home))
+
+
 def load_runner():
     name = "chatgpt_oracle_run_test"
     spec = importlib.util.spec_from_file_location(name, RUNNER_PATH)
@@ -20,10 +38,15 @@ def load_runner():
     module = importlib.util.module_from_spec(spec)
     sys.modules[name] = module
     spec.loader.exec_module(module)
+    module.COMPAT.ensure_oracle_compatibility = lambda *args, **kwargs: {"ok": True}
     return module
 
 
-def manifest(tmp_path: Path, **extra) -> Path:
+def custom_oracle_command() -> list[str]:
+    return [str((Path(os.environ["CODEX_HOME"]) / "mcp_servers/oracle-0.17.1/node_modules/.bin/oracle.cmd").resolve())]
+
+
+def manifest(tmp_path: Path, *, platform_name: str = "nt", **extra) -> Path:
     mission = tmp_path / "mission.md"
     mission.write_text("finish", encoding="utf-8")
     path = tmp_path / "job.json"
@@ -34,7 +57,7 @@ def manifest(tmp_path: Path, **extra) -> Path:
         "app_name": "DevSpace",
         "mode": "browser",
         "run_root": str((tmp_path.parent / f"{tmp_path.name}-host-state" / "runs").resolve()),
-        "oracle_command": ["oracle"],
+        "oracle_command": [str((Path(os.environ["CODEX_HOME"]) / "mcp_servers/oracle-0.17.1/node_modules/.bin" / ("oracle.cmd" if platform_name == "nt" else "oracle")).resolve())],
     }
     payload.update(extra)
     path.write_text(json.dumps(payload), encoding="utf-8")
@@ -75,29 +98,30 @@ def pro_readonly_manifest(tmp_path: Path, **extra) -> Path:
 
 
 def version_runner(command, **kwargs):
-    return subprocess.CompletedProcess(command, 0, stdout="oracle 0.13.0\n", stderr="")
+    return subprocess.CompletedProcess(command, 0, stdout="oracle 0.17.1-custom.10\n", stderr="")
 
 
 def version_0171_runner(command, **kwargs):
-    return subprocess.CompletedProcess(command, 0, stdout="oracle 0.17.1\n", stderr="")
+    return subprocess.CompletedProcess(command, 0, stdout="oracle 0.17.1-custom.10\n", stderr="")
 
 
 def version_timeout_runner(command, **kwargs):
     raise subprocess.TimeoutExpired(command, kwargs.get("timeout", 30))
 
 
-def test_version_resolution_allows_a_bounded_slow_valid_oracle_0161() -> None:
+def test_version_resolution_reads_the_colocated_custom_oracle_version() -> None:
     runner = load_runner()
     captured = {}
 
     def slow_valid(command, **kwargs):
         captured["command"] = command
         captured["timeout"] = kwargs["timeout"]
-        return subprocess.CompletedProcess(command, 0, stdout="oracle 0.17.1\n", stderr="")
+        return subprocess.CompletedProcess(command, 0, stdout="oracle 0.17.1-custom.10\n", stderr="")
 
-    assert runner.resolve_oracle_version(["npx.cmd", "-y", "@steipete/oracle@0.17.1"], run_factory=slow_valid) == "oracle 0.17.1"
+    command = [str((Path(os.environ["CODEX_HOME"]) / runner.STATE.ORACLE_CUSTOM_CLI_DIRECTORY / "oracle.cmd").resolve())]
+    assert runner.resolve_oracle_version(command, run_factory=slow_valid) == "oracle 0.17.1-custom.10"
     assert captured == {
-        "command": ["npx.cmd", "-y", "@steipete/oracle@0.17.1", "--version"],
+        "command": [*command, "--version"],
         "timeout": runner.ORACLE_VERSION_RESOLUTION_TIMEOUT_SECONDS,
     }
     assert runner.ORACLE_VERSION_RESOLUTION_TIMEOUT_SECONDS == 90
@@ -109,8 +133,8 @@ def test_default_oracle_command_prefers_the_exact_installed_custom_package(
     runner = load_runner()
     codex_home = tmp_path / ".codex"
     package_root = codex_home / "mcp_servers/oracle-0.17.1/node_modules/@steipete/oracle"
-    cli = codex_home / runner.STATE.ORACLE_CUSTOM_CLI_RELATIVE
-    package_root.mkdir(parents=True)
+    cli = codex_home / runner.STATE.ORACLE_CUSTOM_CLI_DIRECTORY / "oracle.cmd"
+    package_root.mkdir(parents=True, exist_ok=True)
     cli.parent.mkdir(parents=True, exist_ok=True)
     cli.write_text("@echo off\n", encoding="utf-8")
     (package_root / "package.json").write_text(
@@ -127,29 +151,76 @@ def test_default_oracle_command_prefers_the_exact_installed_custom_package(
     )
 
 
-def test_default_oracle_command_falls_back_to_pinned_npx_on_missing_or_wrong_custom_package(
+def test_new_oracle_commands_fail_closed_on_missing_or_wrong_custom_package(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     runner = load_runner()
     codex_home = tmp_path / ".codex"
     monkeypatch.setenv("CODEX_HOME", str(codex_home))
-    assert runner.STATE.default_oracle_command(platform_name="nt") == (
-        "npx.cmd", "-y", "@steipete/oracle@0.17.1",
-    )
+    shutil.rmtree(codex_home)
+    with pytest.raises(runner.STATE.OracleStateError, match="0.17.1-custom.10"):
+        runner.STATE.default_oracle_command(platform_name="nt")
     package_root = codex_home / "mcp_servers/oracle-0.17.1/node_modules/@steipete/oracle"
-    cli = codex_home / runner.STATE.ORACLE_CUSTOM_CLI_RELATIVE
-    package_root.mkdir(parents=True)
+    cli = codex_home / runner.STATE.ORACLE_CUSTOM_CLI_DIRECTORY / "oracle.cmd"
+    package_root.mkdir(parents=True, exist_ok=True)
     cli.parent.mkdir(parents=True, exist_ok=True)
     cli.write_text("@echo off\n", encoding="utf-8")
     (package_root / "package.json").write_text(
         json.dumps({"name": "@steipete/oracle", "version": "0.17.1-custom.1"}),
         encoding="utf-8",
     )
-    assert runner.STATE.default_oracle_command(platform_name="nt") == (
-        "npx.cmd", "-y", "@steipete/oracle@0.17.1",
-    )
-    with pytest.raises(runner.STATE.OracleStateError, match="0.17.1"):
+    with pytest.raises(runner.STATE.OracleStateError, match="0.17.1-custom.10"):
+        runner.STATE.default_oracle_command(platform_name="nt")
+    with pytest.raises(runner.STATE.OracleStateError, match="colocated"):
         runner.STATE.validate_oracle_command(["npx.cmd", "-y", "@steipete/oracle@0.17.0"])
+    with pytest.raises(runner.STATE.OracleStateError, match="colocated"):
+        runner.STATE.validate_oracle_command(["oracle"])
+
+
+def test_legacy_recovery_command_is_explicitly_exempt_from_new_run_policy() -> None:
+    runner = load_runner()
+
+    assert runner.STATE.validate_oracle_command(
+        ["oracle"], allow_legacy_recovery=True
+    ) == ("oracle",)
+
+
+def test_recovery_allows_only_the_persisted_legacy_command(tmp_path: Path) -> None:
+    runner = load_runner()
+    config = runner.STATE.load_manifest(manifest(tmp_path))
+    layout = runner.STATE.create_layout(config)
+    layout.run_dir.mkdir(parents=True)
+    state = runner.STATE.state_payload(
+        config, layout, status="attention_required", resolved_version="oracle 0.17.1-custom.10"
+    )
+    state["oracle"]["command"] = ["oracle"]
+    runner.STATE.write_json_atomic(layout.state_path, state)
+
+    persisted = runner.recover_run(layout.run_dir, action="harvest", dry_run=True)
+    assert persisted["ok"] is True
+    assert persisted["argv"][0] == "oracle"
+    with pytest.raises(runner.STATE.OracleStateError, match="colocated"):
+        runner.recover_run(
+            layout.run_dir, action="harvest", dry_run=True, oracle_command=["oracle"]
+        )
+
+
+def test_manifest_does_not_relabel_public_npm_integrity_as_custom_package_identity() -> None:
+    payload = json.loads((Path(__file__).resolve().parents[1] / "install-manifest.json").read_text(encoding="utf-8"))
+    oracle = payload["external"]["oracle"]
+
+    assert oracle["tested_version"] == "0.17.1-custom.10"
+    assert "integrity" not in oracle
+    assert "not an npm tarball" in oracle["installation"]
+
+
+def test_new_run_rejects_a_noncustom_oracle_version_before_browser_launch() -> None:
+    runner = load_runner()
+
+    with pytest.raises(runner.OracleRunError, match="0.17.1-custom.10") as exc:
+        runner.require_custom_oracle_version("oracle 0.17.1")
+
+    assert exc.value.code == "ORACLE_CUSTOM_VERSION_REQUIRED"
 
 
 def test_npx_oracle_uses_a_host_state_isolated_prefix(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -200,14 +271,14 @@ def test_version_resolution_receives_the_isolated_environment() -> None:
 
     def version(command, **kwargs):
         captured.update(kwargs)
-        return subprocess.CompletedProcess(command, 0, stdout="oracle 0.17.1\n", stderr="")
+        return subprocess.CompletedProcess(command, 0, stdout="oracle 0.17.1-custom.10\n", stderr="")
 
     env = {"npm_config_prefix": "isolated"}
     assert runner.resolve_oracle_version(
         ["npx.cmd", "-y", "@steipete/oracle@0.17.1"],
         run_factory=version,
         env=env,
-    ) == "oracle 0.17.1"
+    ) == "oracle 0.17.1-custom.10"
     assert captured["env"] is env
 
 
@@ -305,7 +376,7 @@ def cdp_disconnect_pre_submit_popen(session_root: Path, *, variation: str | None
         if variation == "different-error":
             error_message = "Chrome DevTools client disconnected after an unknown browser event."
         lines = [
-            "? oracle 0.17.1 deterministic fixture",
+            "? oracle 0.17.1-custom.10 deterministic fixture",
             f"Session: {slug}",
             "Mode: browser foreground",
             "Models: 1",
@@ -406,7 +477,7 @@ def isolated_default_oracle_profile(
 
 def duplicate_prompt_popen(command, **kwargs):
     kwargs["stdout"].write(
-        b'oracle 0.17.1\nA session with the same prompt is already running '
+        b'oracle 0.17.1-custom.10\nA session with the same prompt is already running '
         b'(oracle-global-agent-instructio-f39cc47ba5). Reattach with '
         b'"oracle session oracle-global-agent-instructio-f39cc47ba5" or rerun with '
         b'--force to start another run.\n'
@@ -417,7 +488,7 @@ def duplicate_prompt_popen(command, **kwargs):
 
 def copy_profile_manual_login_conflict_popen(command, **kwargs):
     kwargs["stdout"].write(
-        b"oracle 0.17.1\n"
+        b"oracle 0.17.1-custom.10\n"
         b"Launching browser mode (gpt-5.6-sol) with 2 files.\n"
         b"ERROR: --copy-profile cannot be combined with --browser-manual-login: choose either a "
         b"throwaway copied profile or the persistent manual-login profile.\n"
@@ -428,7 +499,7 @@ def copy_profile_manual_login_conflict_popen(command, **kwargs):
 
 def profile_copy_rsync_missing_popen(command, **kwargs):
     kwargs["stdout"].write(
-        b"oracle 0.17.1\n"
+        b"oracle 0.17.1-custom.10\n"
         b"Session: oracle-test-profile-rsync\n"
         b"Launching browser mode (target=GPT-5.6 Sol; requested=gpt-5.6-sol) with 2 files.\n"
         b"ERROR: --copy-profile requires rsync on PATH (spawn failed): spawn rsync ENOENT\n"
@@ -461,7 +532,7 @@ def manual_login_profile_uninitialized_variant(command, *, variation=None, **kwa
         "If you want to reuse an already signed-in Chrome instead, use --browser-attach-running."
     )
     lines = [
-        "🧿 oracle 0.17.1 — Silent run, loud receipts.",
+        "🧿 oracle 0.17.1-custom.10 — Silent run, loud receipts.",
         f"Session: {locator}",
         "Mode: browser foreground",
         "Models: 1",
@@ -487,7 +558,7 @@ def manual_login_profile_uninitialized_variant(command, *, variation=None, **kwa
 
 def thinking_time_selection_unverified_popen(command, **kwargs):
     kwargs["stdout"].write(
-        b"oracle 0.17.1\n"
+        b"oracle 0.17.1-custom.10\n"
         b"Session: oracle-test-thinking-time\n"
         b"Launching browser mode (target=GPT-5.6 Sol; requested=gpt-5.6-sol) with 2 files.\n"
         b"ERROR: Thinking time: selection unverified (requested Heavy); "
@@ -501,7 +572,7 @@ def thinking_time_selection_unverified_popen(command, **kwargs):
 
 def thinking_time_unknown_outcome_popen(command, **kwargs):
     kwargs["stdout"].write(
-        b"oracle 0.17.1\n"
+        b"oracle 0.17.1-custom.10\n"
         b"Session: oracle-test-thinking-time-unknown\n"
         b"Launching browser mode (target=GPT-5.6 Sol; requested=gpt-5.6-sol) with 2 files.\n"
         b"ERROR: Thinking time: unknown outcome selecting Heavy; "
@@ -600,7 +671,7 @@ def test_missing_posix_copy_dependency_still_launches_without_profile_copy(
     monkeypatch.setattr(runner.STATE.shutil, "which", lambda name: None)
 
     result = execute_run(
-        runner, manifest(tmp_path), dry_run=True, platform_name="posix"
+        runner, manifest(tmp_path, platform_name="posix"), dry_run=True, platform_name="posix"
     )
 
     assert "--copy-profile" not in result["argv"]
@@ -816,7 +887,7 @@ def test_complete_requires_zero_exit_and_nonempty_output(tmp_path: Path) -> None
         result = execute_run(runner, manifest(root), run_factory=version_runner, popen_factory=popen_for(code, output, captured, events))
         assert result["ok"] is ok
         assert result["result"]["status"] == status
-        assert result["result"]["oracle"]["resolved_version"] == "oracle 0.13.0"
+        assert result["result"]["oracle"]["resolved_version"] == "oracle 0.17.1-custom.10"
         assert "--file" not in captured["command"]
         assert events == ["popen", "wait"]
         assert Path(result["result"]["artifacts"]["transcript"]).is_file()
@@ -1009,7 +1080,7 @@ def test_post_submit_nonzero_requires_exact_recovery_and_never_restarts(tmp_path
     assert len(calls) == 1
     assert "restart" not in calls[0]
     for action in ("harvest", "live"):
-        recovery = runner.recover_run(Path(result["run_dir"]), action=action, dry_run=True, oracle_command=["oracle"])
+        recovery = runner.recover_run(Path(result["run_dir"]), action=action, dry_run=True, oracle_command=custom_oracle_command())
         assert f"--{action}" in recovery["argv"]
         assert "--write-output" in recovery["argv"]
         assert "--no-recover" not in recovery["argv"]
@@ -1175,7 +1246,7 @@ def test_pro_recovery_uses_exact_slug_without_attachments_or_resubmit(tmp_path: 
         Path(result["run_dir"]),
         action="harvest",
         dry_run=True,
-        oracle_command=["oracle"],
+        oracle_command=custom_oracle_command(),
     )
     argv = recovery["argv"]
     assert argv[argv.index("session") + 1] == state["oracle"]["slug"]
@@ -1559,7 +1630,7 @@ def test_recovery_repairs_legacy_profile_copy_ebusy_without_oracle_call(tmp_path
     recovered = runner.recover_run(
         run_dir,
         action="harvest",
-        oracle_command=["oracle"],
+        oracle_command=custom_oracle_command(),
         popen_factory=lambda *args, **kwargs: calls.append(True),
     )
     settled = runner.STATE.load_state(state_path)
@@ -1602,7 +1673,7 @@ def test_recovery_repairs_legacy_manual_login_profile_lock_without_oracle_call(
     recovered = runner.recover_run(
         run_dir,
         action="harvest",
-        oracle_command=["oracle"],
+        oracle_command=custom_oracle_command(),
         popen_factory=lambda *args, **kwargs: calls.append(True),
     )
     settled = runner.STATE.load_state(state_path)
@@ -1709,7 +1780,7 @@ def test_recovery_repairs_legacy_unsent_cdp_disconnect_without_oracle_call(
     recovered = runner.recover_run(
         run_dir,
         action="harvest",
-        oracle_command=["oracle"],
+        oracle_command=custom_oracle_command(),
         popen_factory=lambda *args, **kwargs: calls.append(True),
     )
     settled = runner.STATE.load_state(state_path)
@@ -1742,7 +1813,7 @@ def test_recovery_settles_legacy_duplicate_prompt_lock_without_oracle_call(tmp_p
     recovered = runner.recover_run(
         run_dir,
         action="harvest",
-        oracle_command=["oracle"],
+        oracle_command=custom_oracle_command(),
         popen_factory=lambda *args, **kwargs: calls.append(True),
     )
     settled = runner.STATE.load_state(state_path)
@@ -1796,7 +1867,7 @@ def test_recovery_repairs_legacy_version_timeout_authority_without_oracle_call(t
     recovered = runner.recover_run(
         run_dir,
         action="harvest",
-        oracle_command=["oracle"],
+        oracle_command=custom_oracle_command(),
         popen_factory=lambda *args, **kwargs: calls.append(True),
     )
     settled = runner.STATE.load_state(state_path)
@@ -1814,7 +1885,7 @@ def test_recovery_no_session_keeps_pre_submit_authority_and_allows_fresh_attempt
     layout.run_dir.mkdir(parents=True)
     runner.STATE.write_json_atomic(
         layout.state_path,
-        runner.STATE.state_payload(config, layout, status="failed", resolved_version="oracle 0.17.1"),
+        runner.STATE.state_payload(config, layout, status="failed", resolved_version="oracle 0.17.1-custom.10"),
     )
     for path in (layout.stdout_path, layout.stderr_path):
         path.touch()
@@ -1827,7 +1898,7 @@ def test_recovery_no_session_keeps_pre_submit_authority_and_allows_fresh_attempt
     recovered = runner.recover_run(
         layout.run_dir,
         action="harvest",
-        oracle_command=["oracle"],
+        oracle_command=custom_oracle_command(),
         popen_factory=no_session,
     )
     settled = runner.STATE.load_state(layout.state_path)
@@ -1843,7 +1914,7 @@ def test_recovery_no_session_never_releases_submitted_unknown_run(tmp_path: Path
     config = runner.STATE.load_manifest(manifest(tmp_path, run_id="f" * 32))
     layout = runner.STATE.create_layout(config, run_id=config.requested_run_id)
     layout.run_dir.mkdir(parents=True)
-    state = runner.STATE.state_payload(config, layout, status="attention_required", resolved_version="oracle 0.17.1")
+    state = runner.STATE.state_payload(config, layout, status="attention_required", resolved_version="oracle 0.17.1-custom.10")
     state["session_authority"] = "submitted_unknown"
     runner.STATE.write_json_atomic(layout.state_path, state)
     for path in (layout.stdout_path, layout.stderr_path):
@@ -1857,7 +1928,7 @@ def test_recovery_no_session_never_releases_submitted_unknown_run(tmp_path: Path
     recovered = runner.recover_run(
         layout.run_dir,
         action="live",
-        oracle_command=["oracle"],
+        oracle_command=custom_oracle_command(),
         popen_factory=no_session,
     )
     settled = runner.STATE.load_state(layout.state_path)
@@ -2026,7 +2097,7 @@ def test_standalone_qualified_pro_prompt_timeout_can_be_user_settled_and_unlocks
     recovered = runner.recover_run(
         run_dir,
         action="harvest",
-        oracle_command=["oracle"],
+        oracle_command=custom_oracle_command(),
         popen_factory=recovery_binding_unavailable_popen,
     )
 
@@ -2044,7 +2115,7 @@ def test_standalone_qualified_pro_prompt_timeout_can_be_user_settled_and_unlocks
     assert proof is not None
     assert proof["settlement_eligibility"] == "oracle-standalone-qualified-pro/v1"
     assert proof["transport"] == "pro-devspace-readonly"
-    assert proof["oracle_version"] == "0.17.1"
+    assert proof["oracle_version"] == "0.17.1-custom.10"
     assert proof["source_mission_sha256"] == proof["transport_mission_sha256"]
 
 
@@ -2067,7 +2138,7 @@ def test_standalone_qualified_pro_prompt_timeout_keeps_lock_when_evidence_is_inc
     runner.recover_run(
         run_dir,
         action="harvest",
-        oracle_command=["oracle"],
+        oracle_command=custom_oracle_command(),
         popen_factory=recovery_binding_unavailable_popen,
     )
     state_path = run_dir / "state.json"
@@ -2363,7 +2434,7 @@ def test_recovery_captures_output_and_updates_state(tmp_path: Path) -> None:
     recovered = runner.recover_run(
         run_dir,
         action="harvest",
-        oracle_command=["oracle"],
+        oracle_command=custom_oracle_command(),
         popen_factory=recovery_popen,
     )
     assert recovered["ok"] is True
@@ -2396,7 +2467,7 @@ def test_running_exact_session_cannot_publish_partial_harvest(tmp_path: Path) ->
     recovered = runner.recover_run(
         run_dir,
         action="harvest",
-        oracle_command=["oracle"],
+        oracle_command=custom_oracle_command(),
         popen_factory=live_harvest,
     )
 
@@ -2434,7 +2505,7 @@ def test_delivery_timeout_after_visible_work_cannot_settle_a_terminal_harvest(tm
     recovered = runner.recover_run(
         run_dir,
         action="live",
-        oracle_command=["oracle"],
+        oracle_command=custom_oracle_command(),
         popen_factory=timed_out_recovery,
     )
     state = runner.STATE.load_state(run_dir / "state.json")
@@ -2634,7 +2705,7 @@ def test_later_exact_live_observation_restores_provisional_terminal_authority(tm
     terminal = runner.recover_run(
         run_dir,
         action="live",
-        oracle_command=["oracle"],
+        oracle_command=custom_oracle_command(),
         popen_factory=observation("completed"),
     )
     # A later exact live observer is stronger than the provisional terminal
@@ -2646,7 +2717,7 @@ def test_later_exact_live_observation_restores_provisional_terminal_authority(tm
     disagreement = runner.recover_run(
         run_dir,
         action="harvest",
-        oracle_command=["oracle"],
+        oracle_command=custom_oracle_command(),
         popen_factory=observation("running", "partial"),
     )
     output_absent_during_disagreement = not Path(
@@ -2662,7 +2733,7 @@ def test_later_exact_live_observation_restores_provisional_terminal_authority(tm
     settled = runner.recover_run(
         run_dir,
         action="harvest",
-        oracle_command=["oracle"],
+        oracle_command=custom_oracle_command(),
         popen_factory=observation("completed", "durable answer"),
     )
 
@@ -2711,7 +2782,7 @@ def test_pro_structured_mission_rejects_short_terminal_preamble(tmp_path: Path) 
     rejected = runner.recover_run(
         run_dir,
         action="harvest",
-        oracle_command=["oracle"],
+        oracle_command=custom_oracle_command(),
         popen_factory=completed_preamble,
     )
     state = runner.STATE.load_state(run_dir / "state.json")
@@ -2730,7 +2801,7 @@ def test_pro_structured_mission_rejects_short_terminal_preamble(tmp_path: Path) 
     restored = runner.recover_run(
         run_dir,
         action="live",
-        oracle_command=["oracle"],
+        oracle_command=custom_oracle_command(),
         popen_factory=running_observer,
     )
     assert restored["status"] == "session_live"
@@ -2846,7 +2917,7 @@ def test_live_recovery_holds_one_exact_slug_connection_until_terminal(
     settled = runner.recover_run(
         run_dir,
         action="live",
-        oracle_command=["oracle"],
+        oracle_command=custom_oracle_command(),
         popen_factory=recovery,
         settle_timeout_seconds=5,
         settle_interval_seconds=0,
@@ -2899,7 +2970,7 @@ def test_live_recovery_slow_working_page_keeps_one_recovered_tab_until_terminal(
     settled = runner.recover_run(
         run_dir,
         action="live",
-        oracle_command=["oracle"],
+        oracle_command=custom_oracle_command(),
         popen_factory=slow_working_recovery,
         settle_timeout_seconds=3600,
     )
@@ -2932,7 +3003,7 @@ def test_stalled_exact_observation_retains_live_authority_and_project_lock(
     recovered = runner.recover_run(
         run_dir,
         action="live",
-        oracle_command=["oracle"],
+        oracle_command=custom_oracle_command(),
         popen_factory=stalled_observer,
         settle_timeout_seconds=0,
     )
@@ -2981,7 +3052,7 @@ def test_live_recovery_returns_once_when_exact_binding_is_unavailable(
     result = runner.recover_run(
         run_dir,
         action="live",
-        oracle_command=["oracle"],
+        oracle_command=custom_oracle_command(),
         popen_factory=no_binding,
         settle_timeout_seconds=5400,
         settle_interval_seconds=15,
@@ -3098,7 +3169,7 @@ def test_parallel_recovery_reuses_the_parent_scoped_submit_mutex(tmp_path: Path)
         run_factory=version_runner,
         popen_factory=popen_for(4, None, {}, []),
     )
-    recovered = runner.recover_run(Path(result["run_dir"]), action="harvest", dry_run=True, oracle_command=["oracle"])
+    recovered = runner.recover_run(Path(result["run_dir"]), action="harvest", dry_run=True, oracle_command=custom_oracle_command())
     expected = tmp_path.resolve() / ".oracle-parallel-submit" / parent_id
     assert result["result"]["status"] == "attention_required"
     assert recovered["status"] == "dry-run"

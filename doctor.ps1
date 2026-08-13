@@ -94,7 +94,25 @@ if (!$Node -or !$Npx) {
 if (!$GitBash) {
   $Issues += @{code='DEVSPACE_GIT_BASH_MISSING'; detail='Windows DevSpace requires Git Bash'}
 }
-$Commands += 'npx -y @steipete/oracle --version'
+$OracleCli = Join-Path $CodexRoot 'mcp_servers/oracle-0.17.1/node_modules/.bin/oracle.cmd'
+$OraclePackage = Join-Path $CodexRoot 'mcp_servers/oracle-0.17.1/node_modules/@steipete/oracle/package.json'
+$OracleExpectedVersion = '0.17.1-custom.10'
+if (!(Test-Path -LiteralPath $OracleCli -PathType Leaf)) {
+  $Issues += @{code='ORACLE_CUSTOM_CLI_MISSING'; path=$OracleCli}
+}
+if (!(Test-Path -LiteralPath $OraclePackage -PathType Leaf)) {
+  $Issues += @{code='ORACLE_CUSTOM_PACKAGE_MISSING'; path=$OraclePackage}
+} else {
+  try {
+    $OraclePackageValue = Get-Content -LiteralPath $OraclePackage -Raw | ConvertFrom-Json
+    if ([string]$OraclePackageValue.name -ne '@steipete/oracle' -or [string]$OraclePackageValue.version -ne $OracleExpectedVersion) {
+      $Issues += @{code='ORACLE_CUSTOM_PACKAGE_IDENTITY_MISMATCH'; actual_name=[string]$OraclePackageValue.name; actual_version=[string]$OraclePackageValue.version; expected_version=$OracleExpectedVersion}
+    }
+  } catch {
+    $Issues += @{code='ORACLE_CUSTOM_PACKAGE_INVALID'; detail=$_.Exception.Message}
+  }
+}
+$Commands += "& '$OracleCli' --version"
 $Commands += 'python .\skills\chatgpt-workspace-setup\scripts\devspace_tailscale_setup.py doctor --root C:\project --hostname your-device.your-tailnet.ts.net'
 
 $Python = Get-Command python.exe,python -ErrorAction SilentlyContinue | Select-Object -First 1
@@ -170,7 +188,7 @@ if (($Agbrowse -or $UpdateReceipt) -and (!$Python -or !(Test-Path -LiteralPath $
   warnings = $Warnings
   commands = $Commands
   agbrowse = @{selected_version=$SelectedVersion; contract=$Contract; update_receipt=$UpdateReceiptPath}
-  oracle = @{package='@steipete/oracle';tested_version='0.17.1';resolution='npx with a per-run isolated npm prefix'}
+  oracle = @{package='@steipete/oracle';tested_version=$OracleExpectedVersion;resolution='colocated custom CLI/MCP only; public npx and bare oracle are not new-run routes';cli=$OracleCli;package_path=$OraclePackage}
   devspace = @{package='@waishnav/devspace';tested_version='1.0.4';setup='explicit setup skill only'}
   local_multi_gpt = @{enabled=$LocalMultiGptEnabled;doctor=$LocalMultiGptDoctor}
   codexpro = @{

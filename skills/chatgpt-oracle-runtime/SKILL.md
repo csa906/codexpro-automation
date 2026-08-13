@@ -25,8 +25,10 @@ DevSpace read-only at the same exact root. It begins discovery with `read('.')`
 directory-list compatibility and may read decision-relevant material broadly,
 but never writes, edits, invokes shell, or runs commands. Explicit
 `pro-attachment` sends one short instruction plus exact attachment files.
-Regular routes select `GPT-5.6 Sol` with `heavy` and require Oracle
-evidence for visible `Extra High`. Never invent xhigh or silently downgrade.
+Regular routes select `GPT-5.6 Sol` with Oracle `extra-high`, require Oracle
+evidence for visible `Extra High`, and require Power 4/5. `heavy` is a
+compatibility token reserved for `GPT-5.6 Sol` Power 5/5 Pro; it is not a
+regular-route thinking setting. Never invent xhigh or silently downgrade.
 
 On the first DevSpace-backed submission for a new project, the runner checks
 exact equality with local DevSpace `allowedRoots` before creating the Oracle
