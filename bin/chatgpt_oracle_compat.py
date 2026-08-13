@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Any, Sequence
 
 SUPPORTED_VERSION = "0.17.1"
-CUSTOM_SUPPORTED_VERSION = "0.17.1-custom.5"
+CUSTOM_SUPPORTED_VERSION = "0.17.1-custom.6"
 CREATE_NO_WINDOW = 0x08000000
 # Retained only to document the old package lineage.  New work validates and
 # patches the published 0.17.1 package below; 0.16.1 is not accepted anymore.

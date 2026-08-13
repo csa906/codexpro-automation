@@ -576,6 +576,118 @@ def test_attachment_size_text_without_matching_immutable_state_fails_closed(tmp_
     assert state.proven_pre_submit_attachment_size_failure(state_path) is None
 
 
+def test_exact_connector_failure_with_false_prompt_submitted_releases_project(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    state = load_state()
+    run_root = tmp_path / "runs"
+    run_dir = run_root / "connector-run"
+    run_dir.mkdir(parents=True)
+    stdout = run_dir / "stdout.log"
+    stderr = run_dir / "stderr.log"
+    transcript = run_dir / "transcript.md"
+    output = run_dir / "output.md"
+    locator = "oracle-test-connector"
+    message = "ChatGPT did not register DevSpace as a connector mention object."
+    stdout_text = (
+        "oracle custom\n"
+        f"ERROR: {message}\n"
+        f"User error (browser-automation): {message}\n"
+    )
+    stdout.write_text(stdout_text, encoding="utf-8")
+    transcript.write_text(stdout_text, encoding="utf-8")
+    stderr.write_bytes(b"")
+    session_root = tmp_path / "oracle-sessions"
+    meta_dir = session_root / locator
+    meta_dir.mkdir(parents=True)
+    monkeypatch.setenv("ORACLE_SESSION_ROOT", str(session_root))
+    meta = {
+        "id": locator,
+        "status": "error",
+        "model": "gpt-5.6-sol",
+        "mode": "browser",
+        "completedAt": "2026-08-13T00:00:00Z",
+        "browser": {
+            "config": {
+                "desiredModel": "GPT-5.6 Sol",
+                "modelStrategy": "select",
+                "thinkingTime": "heavy",
+            },
+            "runtime": {"promptSubmitted": False, "tabUrl": "https://chatgpt.com/"},
+        },
+        "options": {"model": "gpt-5.6-sol", "slug": locator},
+        "errorMessage": message,
+        "error": {
+            "category": "browser-automation",
+            "message": message,
+            "details": {
+                "stage": "submit-prompt",
+                "code": "connector-mention-not-registered",
+                "connector": "DevSpace",
+            },
+        },
+    }
+    (meta_dir / "meta.json").write_text(json.dumps(meta), encoding="utf-8")
+    state_path = run_dir / "state.json"
+    state_path.write_text(json.dumps({
+        "schema": "codex.chatgpt.oracle-run-state/v1",
+        "run_id": run_dir.name,
+        "project_root": str(tmp_path),
+        "mode": "browser",
+        "transport": "pro-devspace-readonly",
+        "status": "attention_required",
+        "session_authority": "submitted_unknown",
+        "terminal_harvested": False,
+        "profile": {
+            "model": "gpt-5.6-sol",
+            "model_strategy": "select",
+            "thinking_time": "heavy",
+        },
+        "oracle": {
+            "resolved_version": state.ORACLE_CUSTOM_PACKAGE_VERSION,
+            "session_locator": locator,
+        },
+        "artifacts": {
+            "output": str(output),
+            "stdout": str(stdout),
+            "stderr": str(stderr),
+            "transcript": str(transcript),
+        },
+    }), encoding="utf-8")
+
+    evidence = state.proven_pre_submit_connector_failure(state_path)
+    assert evidence is not None
+    assert evidence["prompt_submitted"] is False
+    assert evidence["oracle_error_code"] == "connector-mention-not-registered"
+    settled = state.settle_proven_pre_submit_failure(state_path)
+    assert settled is not None
+    assert settled["session_authority"] == "pre_submit"
+    assert settled["task_outcome"] == "not_executed"
+    assert settled["task_outcome_reason"] == "oracle-connector-pre-submit"
+    assert state.unresolved_project_sessions(run_root, tmp_path) == []
+
+
+def test_connector_failure_with_true_prompt_submitted_fails_closed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    state = load_state()
+    # Reuse the full fixture above, then tamper the exact Oracle meta evidence.
+    test_exact_connector_failure_with_false_prompt_submitted_releases_project(
+        tmp_path, monkeypatch
+    )
+    meta_path = tmp_path / "oracle-sessions" / "oracle-test-connector" / "meta.json"
+    meta = json.loads(meta_path.read_text(encoding="utf-8"))
+    meta["browser"]["runtime"]["promptSubmitted"] = True
+    meta_path.write_text(json.dumps(meta), encoding="utf-8")
+    state_path = tmp_path / "runs" / "connector-run" / "state.json"
+    payload = json.loads(state_path.read_text(encoding="utf-8"))
+    payload["session_authority"] = "submitted_unknown"
+    payload.pop("pre_submit_failure", None)
+    state_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    assert state.proven_pre_submit_connector_failure(state_path) is None
+
+
 def test_not_executed_outcome_needs_attention_even_when_terminal(tmp_path: Path) -> None:
     state = load_state()
     output = tmp_path / "output.md"

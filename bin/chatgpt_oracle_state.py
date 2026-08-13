@@ -106,7 +106,7 @@ ORACLE_CDP_DISCONNECT_PRE_SUBMIT_ERROR = (
     "the browser target appears still alive."
 )
 ORACLE_STANDALONE_PRO_NO_SUBMISSION_VERSIONS = {"0.17.1"}
-ORACLE_CUSTOM_PACKAGE_VERSION = "0.17.1-custom.5"
+ORACLE_CUSTOM_PACKAGE_VERSION = "0.17.1-custom.6"
 ORACLE_CUSTOM_CLI_RELATIVE = Path("mcp_servers/oracle-0.17.1/node_modules/.bin/oracle.cmd")
 USER_CONFIRMED_NO_SUBMISSION = "user-confirmed-no-submission"
 USER_CONFIRMED_EXECUTION_ENDED = "user-confirmed-task-ended"
@@ -138,6 +138,12 @@ ORACLE_THINKING_TIME_PRE_SUBMIT_RE = re.compile(
     r"(?P<requested>[^);]+)\)?; refusing to submit without confirmed (?P<required>[^.]+)\.",
     re.IGNORECASE,
 )
+ORACLE_CONNECTOR_PRE_SUBMIT_MESSAGES = {
+    "ChatGPT did not register DevSpace as a connector mention object.":
+        "connector-mention-not-registered",
+    "ChatGPT did not offer the DevSpace connector mention object.":
+        "connector-mention-unavailable",
+}
 # Upstream Oracle copies a signed-in browser profile with rsync.  On POSIX
 # hosts without rsync the copy fails after launch, so feasibility is decided
 # while loading the manifest instead of crashing mid-launch.  The pinned
@@ -2284,6 +2290,120 @@ def proven_pre_submit_model_switcher_failure(state_path: Path) -> dict[str, Any]
     }
 
 
+def proven_pre_submit_connector_failure(state_path: Path) -> dict[str, Any] | None:
+    """Prove the qualified DevSpace selector failed before any prompt send."""
+    state = load_state(state_path)
+    if str(state.get("session_authority") or "") not in {"pre_submit", "submitted_unknown"}:
+        return None
+    if state.get("terminal_harvested") is True or _state_has_conversation_url(state):
+        return None
+    if str(state.get("mode") or "") != "browser" or not is_pro_readonly_transport(
+        str(state.get("transport") or "")
+    ):
+        return None
+    profile = state.get("profile") if isinstance(state.get("profile"), dict) else {}
+    oracle = state.get("oracle") if isinstance(state.get("oracle"), dict) else {}
+    locator = str(oracle.get("session_locator") or oracle.get("slug") or "").strip()
+    if (
+        str(profile.get("model") or "") != "gpt-5.6-sol"
+        or str(profile.get("model_strategy") or "") != "select"
+        or str(profile.get("thinking_time") or "") != "heavy"
+        or str(oracle.get("resolved_version") or "").removeprefix("oracle ").strip()
+        != ORACLE_CUSTOM_PACKAGE_VERSION
+        or not locator
+    ):
+        return None
+
+    run_dir = state_path.parent.resolve()
+    artifacts = state.get("artifacts") if isinstance(state.get("artifacts"), dict) else {}
+    canonical = {
+        "output": run_dir / "output.md",
+        "stdout": run_dir / "stdout.log",
+        "stderr": run_dir / "stderr.log",
+        "transcript": run_dir / "transcript.md",
+    }
+    resolved: dict[str, Path] = {}
+    try:
+        for name, expected in canonical.items():
+            path = Path(str(artifacts.get(name) or ""))
+            if not path.is_absolute() or path.is_symlink() or path.resolve() != expected:
+                return None
+            resolved[name] = path
+        if resolved["output"].exists():
+            return None
+        stdout_bytes = resolved["stdout"].read_bytes()
+        stderr_bytes = resolved["stderr"].read_bytes()
+        transcript_bytes = resolved["transcript"].read_bytes()
+        stdout_text = stdout_bytes.decode("utf-8", errors="strict")
+    except (OSError, UnicodeDecodeError):
+        return None
+    if stderr_bytes or transcript_bytes != stdout_bytes:
+        return None
+    if CHATGPT_CONVERSATION_URL_RE.search(stdout_text):
+        return None
+
+    session_root = Path(
+        os.environ.get("ORACLE_SESSION_ROOT") or (Path.home() / ".oracle" / "sessions")
+    ).resolve()
+    meta_path = session_root / locator / "meta.json"
+    if meta_path.is_symlink():
+        return None
+    try:
+        meta_bytes = meta_path.read_bytes()
+        meta = json.loads(meta_bytes.decode("utf-8", errors="strict"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+        return None
+    browser = meta.get("browser") if isinstance(meta.get("browser"), dict) else {}
+    config = browser.get("config") if isinstance(browser.get("config"), dict) else {}
+    runtime = browser.get("runtime") if isinstance(browser.get("runtime"), dict) else {}
+    error = meta.get("error") if isinstance(meta.get("error"), dict) else {}
+    details = error.get("details") if isinstance(error.get("details"), dict) else {}
+    options = meta.get("options") if isinstance(meta.get("options"), dict) else {}
+    error_message = str(error.get("message") or "")
+    expected_code = ORACLE_CONNECTOR_PRE_SUBMIT_MESSAGES.get(error_message)
+    if (
+        expected_code is None
+        or meta.get("id") != locator
+        or meta.get("status") != "error"
+        or meta.get("model") != "gpt-5.6-sol"
+        or meta.get("mode") != "browser"
+        or not str(meta.get("completedAt") or "").strip()
+        or config.get("desiredModel") != "GPT-5.6 Sol"
+        or config.get("modelStrategy") != "select"
+        or config.get("thinkingTime") != "heavy"
+        or options.get("model") != "gpt-5.6-sol"
+        or options.get("slug") != locator
+        or runtime.get("promptSubmitted") is not False
+        or runtime.get("tabUrl") not in {None, "https://chatgpt.com/"}
+        or error.get("category") != "browser-automation"
+        or details.get("stage") != "submit-prompt"
+        or details.get("code") != expected_code
+        or details.get("connector") != "DevSpace"
+        or str(meta.get("errorMessage") or "") != error_message
+        or CHATGPT_CONVERSATION_URL_RE.search(meta_bytes.decode("utf-8", errors="strict"))
+    ):
+        return None
+    exact_errors = [f"ERROR: {error_message}", f"User error (browser-automation): {error_message}"]
+    if stdout_text.splitlines()[-2:] != exact_errors:
+        return None
+    return {
+        "schema": "codex.chatgpt.oracle-pre-submit-ui-failure/v1",
+        "code": "ORACLE_CONNECTOR_PRE_SUBMIT_FAILED",
+        "oracle_locator": locator,
+        "oracle_error_code": expected_code,
+        "stdout_sha256": hashlib.sha256(stdout_bytes).hexdigest(),
+        "stderr_sha256": hashlib.sha256(stderr_bytes).hexdigest(),
+        "transcript_sha256": hashlib.sha256(transcript_bytes).hexdigest(),
+        "oracle_meta_path": str(meta_path),
+        "oracle_meta_sha256": hashlib.sha256(meta_bytes).hexdigest(),
+        "output_absent": True,
+        "conversation_url_absent": True,
+        "prompt_submitted": False,
+        "resolved_version": ORACLE_CUSTOM_PACKAGE_VERSION,
+        "failure_reason": expected_code,
+    }
+
+
 def proven_pre_submit_attachment_size_failure(state_path: Path) -> dict[str, Any] | None:
     """Prove Oracle rejected an oversized attachment before browser submission."""
     state = load_state(state_path)
@@ -2348,6 +2468,7 @@ def proven_pre_submit_failure(state_path: Path) -> dict[str, Any] | None:
         or proven_pre_submit_profile_copy_ebusy(state_path)
         or proven_pre_submit_thinking_time_failure(state_path)
         or proven_pre_submit_model_switcher_failure(state_path)
+        or proven_pre_submit_connector_failure(state_path)
         or proven_pre_submit_cdp_disconnect(state_path)
         or proven_pre_submit_host_failure(state_path)
         or proven_user_confirmed_no_submission(state_path)
@@ -2397,6 +2518,8 @@ def settle_proven_pre_submit_failure(state_path: Path) -> dict[str, Any] | None:
     if evidence is None:
         evidence = proven_pre_submit_model_switcher_failure(state_path)
     if evidence is None:
+        evidence = proven_pre_submit_connector_failure(state_path)
+    if evidence is None:
         evidence = proven_pre_submit_cdp_disconnect(state_path)
     if evidence is None:
         return None
@@ -2421,6 +2544,7 @@ def settle_proven_pre_submit_failure(state_path: Path) -> dict[str, Any] | None:
                 "ORACLE_LAUNCH_FLAGS_MUTUALLY_EXCLUSIVE_PRELAUNCH_FAILED",
                 "ORACLE_MANUAL_LOGIN_PROFILE_UNINITIALIZED_PRELAUNCH_FAILED",
                 "ORACLE_CDP_DISCONNECT_PRE_SUBMIT_FAILED",
+                "ORACLE_CONNECTOR_PRE_SUBMIT_FAILED",
             }
             else "pending"
         ),
@@ -2441,6 +2565,8 @@ def settle_proven_pre_submit_failure(state_path: Path) -> dict[str, Any] | None:
             if evidence["code"] == "ORACLE_CDP_DISCONNECT_PRE_SUBMIT_FAILED"
             else "oracle-model-switcher-pre-submit"
             if evidence["code"] == "ORACLE_MODEL_SWITCHER_PRE_SUBMIT_FAILED"
+            else "oracle-connector-pre-submit"
+            if evidence["code"] == "ORACLE_CONNECTOR_PRE_SUBMIT_FAILED"
             else "prelaunch-host-failure"
         ),
         "pre_submit_failure": evidence,
