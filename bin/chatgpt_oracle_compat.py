@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Any, Sequence
 
 SUPPORTED_VERSION = "0.17.1"
-CUSTOM_SUPPORTED_VERSION = "0.17.1-custom.9"
+CUSTOM_SUPPORTED_VERSION = "0.17.1-custom.10"
 CREATE_NO_WINDOW = 0x08000000
 # Retained only to document the old package lineage.  New work validates and
 # patches the published 0.17.1 package below; 0.16.1 is not accepted anymore.
@@ -212,8 +212,11 @@ CUSTOM_FILE_CONTRACTS = {
         "required": PATCHES["dist/src/browser/config.js"]["patched"],
     },
     "dist/src/browser/actions/thinkingTime.js": {
-        "source": "630e8508aa72b8f8345150c7aa48a922dbdaf548ec98cf8295e337c77a3b5674",
-        "required": PATCHES["dist/src/browser/actions/thinkingTime.js"]["patched"],
+        # This artifact contains qualified GPT-5.6 Sol Power 5 proof that is
+        # intentionally absent from the public 0.17.1 package. Never replace
+        # it with the public compatibility output.
+        "required": "e98f56450ccd88caae4ad616ee0a5208981a52f2ac48fa58ab157a345786ec01",
+        "custom_only": True,
     },
 }
 
@@ -234,6 +237,12 @@ def _ensure_custom_compatibility(package_root: Path) -> dict[str, Any]:
         if current == contract["required"]:
             already.append(relative)
             continue
+        if contract.get("custom_only"):
+            raise OracleCompatError(
+                "ORACLE_CUSTOM_FILE_HASH_MISMATCH",
+                "custom Oracle compatibility refuses an unknown custom-only file",
+                {"path": str(target), "actual": current, "expected": [contract["required"]]},
+            )
         if current != contract["source"]:
             raise OracleCompatError(
                 "ORACLE_CUSTOM_FILE_HASH_MISMATCH",

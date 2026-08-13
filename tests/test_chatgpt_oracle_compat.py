@@ -187,6 +187,58 @@ def test_custom_oracle_rejects_unknown_custom_or_public_bytes(
     assert mismatch.value.code == "ORACLE_CUSTOM_FILE_HASH_MISMATCH"
 
 
+def test_custom_only_artifact_accepts_exact_bytes_and_never_copies_public_output(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    compat = load_compat()
+    custom = tmp_path / "custom"
+    public = tmp_path / "public"
+    custom.mkdir()
+    public.mkdir()
+    (custom / "package.json").write_text(
+        json.dumps({"version": compat.CUSTOM_SUPPORTED_VERSION}), encoding="utf-8"
+    )
+    (public / "package.json").write_text(
+        json.dumps({"version": compat.SUPPORTED_VERSION}), encoding="utf-8"
+    )
+    target = custom / "thinkingTime.js"
+    public_target = public / "thinkingTime.js"
+    target.write_bytes(b"strict-custom\n")
+    public_target.write_bytes(b"public-patched\n")
+    monkeypatch.setattr(compat, "resolve_package_root", lambda version: public)
+    monkeypatch.setattr(
+        compat,
+        "CUSTOM_FILE_CONTRACTS",
+        {
+            "thinkingTime.js": {
+                "required": digest(b"strict-custom\n"),
+                "custom_only": True,
+            }
+        },
+    )
+
+    accepted = compat.ensure_oracle_compatibility(
+        f"oracle {compat.CUSTOM_SUPPORTED_VERSION}", package_root=custom
+    )
+    assert accepted["already_patched"] == ["thinkingTime.js"]
+    assert accepted["changed"] == []
+
+    target.write_bytes(public_target.read_bytes())
+    with pytest.raises(compat.OracleCompatError) as public_mismatch:
+        compat.ensure_oracle_compatibility(
+            f"oracle {compat.CUSTOM_SUPPORTED_VERSION}", package_root=custom
+        )
+    assert public_mismatch.value.code == "ORACLE_CUSTOM_FILE_HASH_MISMATCH"
+    assert target.read_bytes() == b"public-patched\n"
+
+    target.write_bytes(b"unknown\n")
+    with pytest.raises(compat.OracleCompatError) as unknown_mismatch:
+        compat.ensure_oracle_compatibility(
+            f"oracle {compat.CUSTOM_SUPPORTED_VERSION}", package_root=custom
+        )
+    assert unknown_mismatch.value.code == "ORACLE_CUSTOM_FILE_HASH_MISMATCH"
+
+
 def test_published_0171_patch_requires_extra_high_and_pro_selection_proof(tmp_path: Path) -> None:
     compat = load_compat()
     source = (
