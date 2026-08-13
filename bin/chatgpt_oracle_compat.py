@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any, Sequence
 
 SUPPORTED_VERSION = "0.17.1"
+CUSTOM_SUPPORTED_VERSION = "0.17.1-custom.4"
 CREATE_NO_WINDOW = 0x08000000
 # Retained only to document the old package lineage.  New work validates and
 # patches the published 0.17.1 package below; 0.16.1 is not accepted anymore.
@@ -142,7 +143,9 @@ PATCHES = {
     },
 }
 
-
+# The custom package already contains the DevSpace connector selector.  Its
+# remaining compatibility-critical files must exactly match either the known
+# custom build or the same strict 0.17.1 outputs used by the public npx route.
 class OracleCompatError(RuntimeError):
     def __init__(self, code: str, message: str, evidence: dict[str, Any] | None = None):
         super().__init__(message)
@@ -193,6 +196,74 @@ def resolve_package_roots(version: str = SUPPORTED_VERSION) -> list[Path]:
             {"version": version, "candidates": [str(path) for path in candidates[:8]]},
         )
     return matching
+
+
+CUSTOM_FILE_CONTRACTS = {
+    "dist/src/browser/recoverConversation.js": {
+        "source": "d7e39d21acf07e6d227e761944519e11cd8d93930629cc87555d7de75a42d1ca",
+        "required": PATCHES["dist/src/browser/recoverConversation.js"]["patched"],
+    },
+    "dist/src/browser/profileCopy.js": {
+        "source": "06c692861f8a4c1a8769f957b9c582426a13bf4972262c47c1f24a87b239064f",
+        "required": PATCHES["dist/src/browser/profileCopy.js"]["patched"],
+    },
+    "dist/src/browser/config.js": {
+        "source": "e2d642ba0b76bd439e96d02b1d2610577a288b4087d70cd0db093e7d4ab7bf23",
+        "required": PATCHES["dist/src/browser/config.js"]["patched"],
+    },
+    "dist/src/browser/actions/thinkingTime.js": {
+        "source": "630e8508aa72b8f8345150c7aa48a922dbdaf548ec98cf8295e337c77a3b5674",
+        "required": PATCHES["dist/src/browser/actions/thinkingTime.js"]["patched"],
+    },
+}
+
+
+def _ensure_custom_compatibility(package_root: Path) -> dict[str, Any]:
+    root = package_root.expanduser().resolve(strict=True)
+    if package_version(root) != CUSTOM_SUPPORTED_VERSION:
+        raise OracleCompatError(
+            "ORACLE_VERSION_MISMATCH",
+            "custom Oracle package version does not match the resolved CLI version",
+        )
+    public_root = resolve_package_root(SUPPORTED_VERSION)
+    changed: list[str] = []
+    already: list[str] = []
+    for relative, contract in CUSTOM_FILE_CONTRACTS.items():
+        target = root / relative
+        current = sha256_file(target)
+        if current == contract["required"]:
+            already.append(relative)
+            continue
+        if current != contract["source"]:
+            raise OracleCompatError(
+                "ORACLE_CUSTOM_FILE_HASH_MISMATCH",
+                "custom Oracle compatibility refuses an unknown file",
+                {"path": str(target), "actual": current, "expected": [contract["source"], contract["required"]]},
+            )
+        source = public_root / relative
+        source_hash = sha256_file(source)
+        if source_hash != contract["required"]:
+            raise OracleCompatError(
+                "ORACLE_CUSTOM_COMPAT_SOURCE_MISMATCH",
+                "the public Oracle compatibility source is not at the required hash",
+                {"path": str(source), "actual": source_hash, "expected": contract["required"]},
+            )
+        shutil.copy2(source, target)
+        if sha256_file(target) != contract["required"]:
+            raise OracleCompatError(
+                "ORACLE_CUSTOM_COMPAT_COPY_MISMATCH",
+                "custom Oracle compatibility copy did not produce the required hash",
+                {"path": str(target), "expected": contract["required"]},
+            )
+        changed.append(relative)
+    return {
+        "ok": True,
+        "version": CUSTOM_SUPPORTED_VERSION,
+        "package_root": str(root),
+        "package_roots": [str(root)],
+        "changed": changed,
+        "already_patched": already,
+    }
 
 
 def patch_root() -> Path:
@@ -276,6 +347,13 @@ def ensure_oracle_compatibility(
     backup_root: Path | None = None,
 ) -> dict[str, Any]:
     version = resolved_version.strip().removeprefix("oracle ").strip()
+    if version == CUSTOM_SUPPORTED_VERSION:
+        if package_root is None:
+            raise OracleCompatError(
+                "ORACLE_CUSTOM_PACKAGE_ROOT_REQUIRED",
+                "the custom Oracle compatibility route requires its exact installed package root",
+            )
+        return _ensure_custom_compatibility(package_root)
     if version != SUPPORTED_VERSION:
         raise OracleCompatError(
             "ORACLE_VERSION_UNVALIDATED",

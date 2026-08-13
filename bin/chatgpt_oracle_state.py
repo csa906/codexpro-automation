@@ -106,7 +106,7 @@ ORACLE_CDP_DISCONNECT_PRE_SUBMIT_ERROR = (
     "the browser target appears still alive."
 )
 ORACLE_STANDALONE_PRO_NO_SUBMISSION_VERSIONS = {"0.17.1"}
-ORACLE_CUSTOM_PACKAGE_VERSION = "0.17.1-custom.3"
+ORACLE_CUSTOM_PACKAGE_VERSION = "0.17.1-custom.4"
 ORACLE_CUSTOM_CLI_RELATIVE = Path("mcp_servers/oracle-0.17.1/node_modules/.bin/oracle.cmd")
 USER_CONFIRMED_NO_SUBMISSION = "user-confirmed-no-submission"
 USER_CONFIRMED_EXECUTION_ENDED = "user-confirmed-task-ended"

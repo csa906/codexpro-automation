@@ -111,6 +111,82 @@ def test_unknown_oracle_version_or_file_hash_fails_closed(tmp_path: Path) -> Non
     assert mismatch.value.code == "ORACLE_FILE_HASH_MISMATCH"
 
 
+def test_custom_oracle_copies_only_exact_public_compat_outputs(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    compat = load_compat()
+    custom = tmp_path / "custom"
+    public = tmp_path / "public"
+    custom.mkdir()
+    public.mkdir()
+    (custom / "package.json").write_text(
+        json.dumps({"version": compat.CUSTOM_SUPPORTED_VERSION}), encoding="utf-8"
+    )
+    (public / "package.json").write_text(
+        json.dumps({"version": compat.SUPPORTED_VERSION}), encoding="utf-8"
+    )
+    custom_target = custom / "sample.js"
+    public_target = public / "sample.js"
+    custom_target.write_bytes(b"custom\n")
+    public_target.write_bytes(b"required\n")
+    monkeypatch.setattr(compat, "resolve_package_root", lambda version: public)
+    monkeypatch.setattr(
+        compat,
+        "CUSTOM_FILE_CONTRACTS",
+        {
+            "sample.js": {
+                "source": digest(b"custom\n"),
+                "required": digest(b"required\n"),
+            }
+        },
+    )
+
+    first = compat.ensure_oracle_compatibility(
+        f"oracle {compat.CUSTOM_SUPPORTED_VERSION}", package_root=custom
+    )
+    second = compat.ensure_oracle_compatibility(
+        f"oracle {compat.CUSTOM_SUPPORTED_VERSION}", package_root=custom
+    )
+
+    assert first["changed"] == ["sample.js"]
+    assert second["already_patched"] == ["sample.js"]
+    assert custom_target.read_bytes() == b"required\n"
+
+
+def test_custom_oracle_rejects_unknown_custom_or_public_bytes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    compat = load_compat()
+    custom = tmp_path / "custom"
+    public = tmp_path / "public"
+    custom.mkdir()
+    public.mkdir()
+    (custom / "package.json").write_text(
+        json.dumps({"version": compat.CUSTOM_SUPPORTED_VERSION}), encoding="utf-8"
+    )
+    (public / "package.json").write_text(
+        json.dumps({"version": compat.SUPPORTED_VERSION}), encoding="utf-8"
+    )
+    (custom / "sample.js").write_bytes(b"unknown\n")
+    (public / "sample.js").write_bytes(b"required\n")
+    monkeypatch.setattr(compat, "resolve_package_root", lambda version: public)
+    monkeypatch.setattr(
+        compat,
+        "CUSTOM_FILE_CONTRACTS",
+        {
+            "sample.js": {
+                "source": digest(b"custom\n"),
+                "required": digest(b"required\n"),
+            }
+        },
+    )
+    with pytest.raises(compat.OracleCompatError) as mismatch:
+        compat.ensure_oracle_compatibility(
+            f"oracle {compat.CUSTOM_SUPPORTED_VERSION}", package_root=custom
+        )
+    assert mismatch.value.code == "ORACLE_CUSTOM_FILE_HASH_MISMATCH"
+
+
 def test_published_0171_patch_requires_extra_high_and_pro_selection_proof(tmp_path: Path) -> None:
     compat = load_compat()
     source = (

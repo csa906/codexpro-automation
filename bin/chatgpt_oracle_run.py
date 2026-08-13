@@ -257,6 +257,17 @@ def isolated_oracle_environment(
     return env
 
 
+def oracle_package_root(command: Sequence[str]) -> Path | None:
+    """Resolve the package root for the exact versioned custom CLI path."""
+    if not command:
+        return None
+    executable = Path(command[0]).expanduser().resolve()
+    expected = STATE.custom_oracle_cli_path("nt")
+    if expected is None or executable != expected:
+        return None
+    return expected.parent.parent / "@steipete" / "oracle"
+
+
 def resolve_oracle_version(
     command: Sequence[str],
     *,
@@ -701,7 +712,11 @@ def execute_run(
             platform_name=platform_name,
             env=oracle_env,
         )
-        compat_factory(version)
+        package_root = oracle_package_root(config.oracle_command)
+        if package_root is None:
+            compat_factory(version)
+        else:
+            COMPAT.ensure_oracle_compatibility(version, package_root=package_root)
         if STATE.is_devspace_transport(config.transport):
             devspace_compat = devspace_compat_factory()
             if devspace_compat.get("service_restart_required"):
