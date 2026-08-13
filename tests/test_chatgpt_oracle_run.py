@@ -103,9 +103,48 @@ def test_version_resolution_allows_a_bounded_slow_valid_oracle_0161() -> None:
     assert runner.ORACLE_VERSION_RESOLUTION_TIMEOUT_SECONDS == 90
 
 
-def test_default_oracle_command_is_pinned_to_the_hash_validated_version() -> None:
+def test_default_oracle_command_prefers_the_exact_installed_custom_package(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     runner = load_runner()
+    codex_home = tmp_path / ".codex"
+    package_root = codex_home / "mcp_servers/oracle-0.17.1/node_modules/@steipete/oracle"
+    cli = codex_home / runner.STATE.ORACLE_CUSTOM_CLI_RELATIVE
+    package_root.mkdir(parents=True)
+    cli.parent.mkdir(parents=True, exist_ok=True)
+    cli.write_text("@echo off\n", encoding="utf-8")
+    (package_root / "package.json").write_text(
+        json.dumps({
+            "name": "@steipete/oracle",
+            "version": runner.STATE.ORACLE_CUSTOM_PACKAGE_VERSION,
+        }),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("CODEX_HOME", str(codex_home))
 
+    assert runner.STATE.default_oracle_command(platform_name="nt") == (
+        str(cli.resolve()),
+    )
+
+
+def test_default_oracle_command_falls_back_to_pinned_npx_on_missing_or_wrong_custom_package(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    runner = load_runner()
+    codex_home = tmp_path / ".codex"
+    monkeypatch.setenv("CODEX_HOME", str(codex_home))
+    assert runner.STATE.default_oracle_command(platform_name="nt") == (
+        "npx.cmd", "-y", "@steipete/oracle@0.17.1",
+    )
+    package_root = codex_home / "mcp_servers/oracle-0.17.1/node_modules/@steipete/oracle"
+    cli = codex_home / runner.STATE.ORACLE_CUSTOM_CLI_RELATIVE
+    package_root.mkdir(parents=True)
+    cli.parent.mkdir(parents=True, exist_ok=True)
+    cli.write_text("@echo off\n", encoding="utf-8")
+    (package_root / "package.json").write_text(
+        json.dumps({"name": "@steipete/oracle", "version": "0.17.1-custom.1"}),
+        encoding="utf-8",
+    )
     assert runner.STATE.default_oracle_command(platform_name="nt") == (
         "npx.cmd", "-y", "@steipete/oracle@0.17.1",
     )

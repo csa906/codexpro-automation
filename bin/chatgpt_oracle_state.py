@@ -106,6 +106,8 @@ ORACLE_CDP_DISCONNECT_PRE_SUBMIT_ERROR = (
     "the browser target appears still alive."
 )
 ORACLE_STANDALONE_PRO_NO_SUBMISSION_VERSIONS = {"0.17.1"}
+ORACLE_CUSTOM_PACKAGE_VERSION = "0.17.1-custom.3"
+ORACLE_CUSTOM_CLI_RELATIVE = Path("mcp_servers/oracle-0.17.1/node_modules/.bin/oracle.cmd")
 USER_CONFIRMED_NO_SUBMISSION = "user-confirmed-no-submission"
 USER_CONFIRMED_EXECUTION_ENDED = "user-confirmed-task-ended"
 ORACLE_RECOVERY_STATE_RE = re.compile(r"(?im)^\s*State:\s*[a-z][a-z0-9_-]*\s*$")
@@ -289,8 +291,30 @@ def oracle_state_root() -> Path:
     return Path(override).expanduser().resolve() if override else (Path.home() / ".codex" / "state" / "chatgpt-oracle").resolve()
 
 
+def custom_oracle_cli_path(platform_name: str | None = None) -> Path | None:
+    """Return the exact installed custom Oracle CLI when its package identity matches."""
+    platform = os.name if platform_name is None else platform_name
+    if platform != "nt":
+        return None
+    codex_home = Path(os.environ.get("CODEX_HOME") or (Path.home() / ".codex")).expanduser().resolve()
+    cli = (codex_home / ORACLE_CUSTOM_CLI_RELATIVE).resolve()
+    package = (codex_home / "mcp_servers/oracle-0.17.1/node_modules/@steipete/oracle/package.json").resolve()
+    try:
+        payload = json.loads(package.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    if str(payload.get("name") or "") != "@steipete/oracle":
+        return None
+    if str(payload.get("version") or "") != ORACLE_CUSTOM_PACKAGE_VERSION:
+        return None
+    return cli if cli.is_file() else None
+
+
 def default_oracle_command(platform_name: str | None = None) -> tuple[str, ...]:
     platform = os.name if platform_name is None else platform_name
+    custom_cli = custom_oracle_cli_path(platform)
+    if custom_cli is not None:
+        return (str(custom_cli),)
     return ("npx.cmd" if platform == "nt" else "npx", "-y", "@steipete/oracle@0.17.1")
 
 
