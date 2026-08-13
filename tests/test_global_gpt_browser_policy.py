@@ -27,15 +27,53 @@ def test_new_regular_modes_route_only_to_oracle_devspace() -> None:
     assert "app picker" not in value.casefold()
 
 
-def test_pro_is_oracle_attachment_only_and_never_uses_devspace_or_codexpro() -> None:
+def test_qualified_pro_uses_read_only_devspace_and_attachments_are_explicit() -> None:
     value = text(PRO)
-    assert "attachment" in value.casefold()
-    assert "Oracle is the only backend for a new Pro run" in value
-    assert "must never invoke DevSpace or CodexPro" not in value
-    assert "There is no new agbrowse, CodexPro, DevSpace" in value
+    flat = " ".join(value.split())
+    assert "Oracle is the only backend for a new Pro run" in flat
+    assert "manually registered DevSpace app in read-only mode" in flat
+    assert "exact absolute project root" in flat
+    assert "Read-only is absolute" in flat
+    assert "`pro-attachment` is attachment-only through Oracle" in flat
+    assert "immutable/external evidence or artifacts that DevSpace cannot read" in flat
+    assert "never an automatic fallback from qualified Pro DevSpace" in flat
+    assert "There is no new agbrowse,\nCodexPro" in value
     handoff = text(HANDOFF)
-    assert "Pro is attachment-only through `chatgpt-pro-browser` and Oracle" in handoff
-    assert "never uses\nDevSpace or CodexPro" in handoff
+    assert "read-only DevSpace Pro by default" in handoff
+    assert "`pro-attachment` remains an explicit attachment-only" in handoff
+
+
+def test_qualified_pro_permits_broad_adaptive_read_only_project_context() -> None:
+    value = text(PRO)
+    flat = " ".join(value.split())
+    assert "begins with the `read('.')` directory-list compatibility call" in flat
+    assert "discover and read broadly and adaptively within that exact root" in flat
+    assert "A narrow preselected evidence allowlist is not required" in flat
+    assert "applicable `AGENTS.md` chain completely" in flat
+    assert "current Git state, project rules, mission artifacts" in flat
+    assert "must not write or edit files, invoke a shell, or run commands" in flat
+
+
+def test_qualified_pro_fails_closed_when_devspace_tools_are_not_exposed() -> None:
+    value = text(PRO)
+    flat = " ".join(value.split())
+    assert "TASK_OUTCOME: EXECUTED|NOT_EXECUTED|BLOCKED" in flat
+    assert "zero callable DevSpace tools" in flat
+    assert "`NOT_EXECUTED`, never successful Pro work" in flat
+    assert "at most one fresh retry with the same mission bytes and SHA-256" in flat
+    assert "do not loop, manipulate ChatGPT app settings" in flat
+
+
+def test_pro_requires_an_evidence_based_web_multi_decision_and_auto_handoff() -> None:
+    value = text(PRO)
+    assert "WEB_MULTI_NEEDED: YES|NO" in value
+    assert "WEB_MULTI_REASON: evidence-based reason" in value
+    assert "three to five materially independent" in value
+    assert "ready-to-run Web Multi-GPT Very\nHigh mission" in value
+    assert "same project maximum-context evidence and the durable Pro answer" in value
+    assert "stable lane order, and synthesis/judge criteria" in value
+    assert "automatically without a routine user\nchoice" in value
+    assert "trivial, single-answer, or purely mechanical question" in value
 
 
 def test_deep_research_uses_oracle_deep_without_silent_fallback() -> None:
@@ -99,6 +137,7 @@ def test_install_inventory_contains_new_active_runtime_and_keeps_legacy_recovery
         "bin/chatgpt_oracle_dispatch.py",
         "bin/chatgpt_oracle_multi.py",
         "bin/chatgpt_oracle_comprehensive.py",
+        "bin/devspace-compat/1.0.4/directory-read.patch",
         "skills/chatgpt-workspace-setup/SKILL.md",
     ):
         assert path in include
@@ -106,7 +145,8 @@ def test_install_inventory_contains_new_active_runtime_and_keeps_legacy_recovery
     assert manifest["routing"] == {
         "new_work_engine": "oracle",
         "regular_workspace_transport": "devspace",
-        "pro_transport": "oracle-attachment-only",
+        "pro_transport": "oracle-devspace-readonly",
+        "pro_attachment_transport": "oracle-attachment-only-explicit",
         "agbrowse": "persisted-run-recovery-only",
         "codexpro": "persisted-run-recovery-only",
     }
@@ -128,6 +168,8 @@ def test_readme_declares_manual_one_time_registration_not_ui_automation() -> Non
     assert "최초 한 번 수동 등록" in value
     assert "ChatGPT 설정·앱 목록·권한·삭제·선택 UI를 자동화하지 않습니다" in value
     assert "실행 신원으로 정확히 복구" in value
+    assert "최초 설치 가이드" in value
+    assert "ChatGPT 앱 `codex` 등록" in value
 
 
 def test_english_readme_maps_modes_to_the_same_oracle_routes() -> None:
@@ -137,7 +179,7 @@ def test_english_readme_maps_modes_to_the_same_oracle_routes() -> None:
     assert "`deep-research` / deep research" in value
     assert "comprehensive mode" in value
     assert "Web Multi-GPT" in value
-    assert "Oracle attachments only" in value
+    assert "Oracle + read-only DevSpace by default; explicit `pro-attachment`" in value
     assert "never resubmits the task" in value
 
 
@@ -156,7 +198,7 @@ def test_agent_metadata_exposes_oracle_active_routes() -> None:
     pro = text(ROOT / "skills" / "chatgpt-pro-browser" / "agents" / "openai.yaml")
     assert "Oracle and DevSpace" in thinking
     assert "parallel Oracle GPT sessions" in multi
-    assert "one-shot attachment-only Pro review through Oracle" in pro
+    assert "read-only DevSpace" in pro
     assert "allow_implicit_invocation: true" in pro
 
 

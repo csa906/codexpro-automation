@@ -18,7 +18,6 @@ from pathlib import Path
 from typing import Any, Sequence
 
 SCHEMA = "codex.chatgpt.oracle-run/v1"
-DEVSPACE_APP_NAME = "DevSpace"
 STATE_SCHEMA = "codex.chatgpt.oracle-run-state/v1"
 STATUSES = {"prepared", "running", "complete", "failed", "attention_required", "abandoned"}
 # One bounded lifecycle vocabulary.  The stored `status` values above remain the
@@ -41,6 +40,7 @@ SESSION_AUTHORITY_RANK = {
     "live": 2,
     "terminal_observed": 3,
     "terminal": 4,
+    "settled_executed": 5,
 }
 WAIT_OBJECT_0 = 0
 WAIT_ABANDONED = 0x80
@@ -65,15 +65,22 @@ SAFE_ORACLE_VALUE_OPTIONS = {
     "--heartbeat",
     "--timeout",
     "--zombie-timeout",
-    # Oracle 0.16.1 is compatibility-patched so this is one overall answer
+    # Oracle 0.17.1 is compatibility-patched so this is one overall answer
     # budget, including fallback capture.  The host also enforces the same
     # wall-clock deadline with a short grace if CDP evaluation itself wedges.
     "--browser-timeout",
     "--browser-recheck-timeout",
 }
-# Overall answer budget for a heavy non-Pro run.
-DEFAULT_BROWSER_ANSWER_TIMEOUT = "90m"
-DEFAULT_BROWSER_ANSWER_CEILING_MINUTES = 90
+# Keep each web episode below the local 75/80-minute checkpoint boundary.
+DEFAULT_BROWSER_ANSWER_TIMEOUT = "70m"
+DEFAULT_BROWSER_ANSWER_CEILING_MINUTES = 70
+DEFAULT_EPISODE_POLICY = {
+    "soft_checkpoint_seconds": 4500,
+    "handoff_seconds": 4800,
+    "observed_platform_limit_seconds": 6000,
+    "max_total_concurrency": 5,
+    "web_answer_budget_seconds": 4200,
+}
 HOST_WATCHDOG_GRACE_SECONDS = 30
 ORACLE_DUPLICATE_PROMPT_RE = re.compile(
     r'A session with the same prompt is already running '
@@ -94,17 +101,68 @@ ORACLE_NO_LIVE_TAB_MARKER = "No live ChatGPT tab matched session"
 ORACLE_NO_RECOVERABLE_URL_MARKER = (
     "session metadata has no recoverable ChatGPT conversation URL"
 )
+ORACLE_CDP_DISCONNECT_PRE_SUBMIT_ERROR = (
+    "Chrome DevTools client disconnected before oracle finished; "
+    "the browser target appears still alive."
+)
+ORACLE_STANDALONE_PRO_NO_SUBMISSION_VERSIONS = {"0.17.1"}
 USER_CONFIRMED_NO_SUBMISSION = "user-confirmed-no-submission"
+USER_CONFIRMED_EXECUTION_ENDED = "user-confirmed-task-ended"
 ORACLE_RECOVERY_STATE_RE = re.compile(r"(?im)^\s*State:\s*[a-z][a-z0-9_-]*\s*$")
+ORACLE_PROFILE_COPY_EBUSY_RE = re.compile(
+    r"(?im)^(?:ERROR:\s*|User error \(browser-automation\):\s*)?"
+    r"EBUSY: resource busy or locked, copyfile ['\"](?P<source>[^'\"]+)['\"] -> ['\"](?P<destination>[^'\"]+)['\"]\s*$"
+)
+ORACLE_COPY_PROFILE_MANUAL_LOGIN_CONFLICT = (
+    "--copy-profile cannot be combined with --browser-manual-login: choose either a "
+    "throwaway copied profile or the persistent manual-login profile."
+)
+ORACLE_PROFILE_COPY_RSYNC_MISSING = (
+    "--copy-profile requires rsync on PATH (spawn failed): spawn rsync ENOENT"
+)
+ORACLE_MANUAL_LOGIN_PROFILE_UNINITIALIZED_RE = re.compile(
+    r"(?m)^(?P<prefix>ERROR|User error \(browser-automation\)):\s+"
+    r"ChatGPT browser manual-login profile is not initialized\. "
+    r"Browser mode is using Oracle's private Chrome profile at (?P<profile>[^,\r\n]+), "
+    r"separate from your normal Chrome profile\. Run first-time setup, sign in there, then retry:"
+)
+ORACLE_MODEL_SWITCHER_PRE_SUBMIT_RE = re.compile(
+    r"Unable to find model option matching .+? in the model switcher\."
+    r".*?No cookies were applied;",
+    re.IGNORECASE | re.DOTALL,
+)
+ORACLE_THINKING_TIME_PRE_SUBMIT_RE = re.compile(
+    r"Thinking time: (?:selection unverified \(requested |unknown outcome selecting )"
+    r"(?P<requested>[^);]+)\)?; refusing to submit without confirmed (?P<required>[^.]+)\.",
+    re.IGNORECASE,
+)
 # Upstream Oracle copies a signed-in browser profile with rsync.  On POSIX
 # hosts without rsync the copy fails after launch, so feasibility is decided
 # while loading the manifest instead of crashing mid-launch.  The pinned
-# `oracle-compat/0.16.1/profileCopy.patch` replaces that spawn with Node's
-# built-in recursive copy on Windows, so `nt` needs no external dependency.
+# Oracle 0.17.1 natively uses Node's recursive copy on Windows, so `nt` needs
+# no external dependency.
 # Checking PATH there would drop per-run profile isolation and block every
 # parallel Web Multi lane, which is the exact failure this guard must avoid.
 PROFILE_COPY_DEPENDENCY = "rsync"
 PROFILE_COPY_NATIVE_PLATFORMS = ("nt",)
+PRO_TRANSPORTS = frozenset(("pro-attachment-only", "pro-devspace-readonly"))
+DEVSPACE_TRANSPORTS = frozenset(("devspace", "pro-devspace-readonly"))
+
+
+def is_pro_transport(transport: str) -> bool:
+    return str(transport or "").strip().casefold() in PRO_TRANSPORTS
+
+
+def is_devspace_transport(transport: str) -> bool:
+    return str(transport or "").strip().casefold() in DEVSPACE_TRANSPORTS
+
+
+def is_pro_readonly_transport(transport: str) -> bool:
+    return str(transport or "").strip().casefold() == "pro-devspace-readonly"
+
+
+def is_attachment_transport(transport: str) -> bool:
+    return str(transport or "").strip().casefold() == "pro-attachment-only"
 
 
 def profile_copy_is_supported(
@@ -120,6 +178,8 @@ APP_RE = re.compile(r"^[^\r\n]+$")
 MODEL_RE = re.compile(r"^[a-zA-Z0-9._ -]+$")
 PARENT_ID_RE = re.compile(r"^[a-f0-9]{32,64}$")
 RUN_ID_RE = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9._-]{7,95}$")
+WEB_MULTI_CHILD_RUN_ID_RE = re.compile(r"^\d{8}T\d{6}Z-[a-f0-9]{12}$")
+CHATGPT_CONVERSATION_URL_RE = re.compile(r"https://chatgpt\.com/c/[A-Za-z0-9_-]+", re.IGNORECASE)
 _THREAD_MUTEXES: dict[str, threading.Lock] = {}
 _THREAD_MUTEXES_GUARD = threading.Lock()
 
@@ -148,6 +208,11 @@ class OracleConfig:
     oracle_command: tuple[str, ...]
     oracle_args: tuple[str, ...]
     submit_mutex_timeout_seconds: float
+    soft_checkpoint_seconds: int
+    handoff_seconds: int
+    observed_platform_limit_seconds: int
+    max_total_concurrency: int
+    web_answer_budget_seconds: int
     model: str
     model_strategy: str
     thinking_time: str
@@ -157,6 +222,8 @@ class OracleConfig:
     task_outcome_contract: str
     parallel_parent_id: str | None
     requested_run_id: str | None
+    web_multi_child_provenance_path: Path | None
+    web_multi_child_provenance_sha256: str | None
 
 
 @dataclass(frozen=True)
@@ -224,7 +291,7 @@ def oracle_state_root() -> Path:
 
 def default_oracle_command(platform_name: str | None = None) -> tuple[str, ...]:
     platform = os.name if platform_name is None else platform_name
-    return ("npx.cmd" if platform == "nt" else "npx", "-y", "@steipete/oracle")
+    return ("npx.cmd" if platform == "nt" else "npx", "-y", "@steipete/oracle@0.17.1")
 
 
 def validate_oracle_command(values: Any) -> tuple[str, ...]:
@@ -235,14 +302,14 @@ def validate_oracle_command(values: Any) -> tuple[str, ...]:
     if executable in {"oracle", "oracle.cmd", "oracle.exe"} and len(command) == 1:
         return command
     if executable in {"npx", "npx.cmd", "npx.exe"} and command[1:] in {
-        ("-y", "@steipete/oracle"),
-        ("--yes", "@steipete/oracle"),
-        ("@steipete/oracle",),
+        ("-y", "@steipete/oracle@0.17.1"),
+        ("--yes", "@steipete/oracle@0.17.1"),
+        ("@steipete/oracle@0.17.1",),
     }:
         return command
     raise OracleStateError(
         "ORACLE_COMMAND_FORBIDDEN",
-        "oracle_command must resolve directly to Oracle or npx @steipete/oracle",
+        "oracle_command must resolve directly to Oracle or npx @steipete/oracle@0.17.1",
         {"command": command_for_display(command)},
     )
 
@@ -294,25 +361,19 @@ def load_manifest(path: Path, *, platform_name: str | None = None) -> OracleConf
     if mode != "browser":
         raise OracleStateError("MODE_INVALID", "Oracle foundation runner supports mode=browser only")
     transport = str(payload.get("transport") or "devspace").strip().casefold()
-    if transport not in {"devspace", "pro-attachment-only"}:
-        raise OracleStateError("TRANSPORT_INVALID", "transport must be devspace or pro-attachment-only")
+    if transport not in {"devspace", *PRO_TRANSPORTS}:
+        raise OracleStateError("TRANSPORT_INVALID", "transport must be devspace, pro-attachment-only, or pro-devspace-readonly")
     app_name_raw = str(payload.get("app_name") or "").strip().lstrip("@").strip()
-    if transport == "devspace":
+    if is_devspace_transport(transport):
         if not is_within(project_root, mission_path):
             raise OracleStateError("MISSION_OUTSIDE_PROJECT", "mission_path must stay inside project_root")
         if not app_name_raw or APP_RE.fullmatch(app_name_raw) is None:
             raise OracleStateError("APP_NAME_INVALID", "app_name must be one nonempty line")
-        if app_name_raw != DEVSPACE_APP_NAME:
-            raise OracleStateError(
-                "DEVSPACE_APP_REQUIRED",
-                f"new non-Pro Oracle runs require the exact app name {DEVSPACE_APP_NAME}",
-                {"app_name": app_name_raw},
-            )
         app_name: str | None = app_name_raw
         if payload.get("attachments"):
             raise OracleStateError("REGULAR_ATTACHMENTS_FORBIDDEN", "DevSpace runs must not attach files")
         attachments: tuple[Path, ...] = ()
-    else:
+    elif is_attachment_transport(transport):
         if app_name_raw:
             raise OracleStateError("PRO_APP_FORBIDDEN", "Pro attachment-only runs must not name an app")
         app_name = None
@@ -348,6 +409,28 @@ def load_manifest(path: Path, *, platform_name: str | None = None) -> OracleConf
         raise OracleStateError("MUTEX_TIMEOUT_INVALID", "submit_mutex_timeout_seconds must be numeric") from exc
     if not 0 < timeout <= 300:
         raise OracleStateError("MUTEX_TIMEOUT_INVALID", "submit_mutex_timeout_seconds must be within 0..300")
+    policy_raw = payload.get("episode_policy") or {}
+    if not isinstance(policy_raw, dict):
+        raise OracleStateError("EPISODE_POLICY_INVALID", "episode_policy must be one object")
+    unknown_policy = set(policy_raw) - set(DEFAULT_EPISODE_POLICY)
+    if unknown_policy:
+        raise OracleStateError("EPISODE_POLICY_INVALID", "episode_policy contains unknown fields", {"fields": sorted(unknown_policy)})
+    policy: dict[str, int] = {}
+    for key, default in DEFAULT_EPISODE_POLICY.items():
+        value = policy_raw.get(key, default)
+        if isinstance(value, bool):
+            raise OracleStateError("EPISODE_POLICY_INVALID", f"{key} must be an integer")
+        try:
+            policy[key] = int(value)
+        except (TypeError, ValueError) as exc:
+            raise OracleStateError("EPISODE_POLICY_INVALID", f"{key} must be an integer") from exc
+    if not (
+        60 <= policy["web_answer_budget_seconds"] <= policy["soft_checkpoint_seconds"]
+        <= policy["handoff_seconds"] < policy["observed_platform_limit_seconds"] <= 7 * 24 * 3600
+    ):
+        raise OracleStateError("EPISODE_POLICY_INVALID", "episode timing must satisfy answer <= checkpoint <= handoff < observed limit")
+    if not 1 <= policy["max_total_concurrency"] <= 5:
+        raise OracleStateError("EPISODE_POLICY_INVALID", "max_total_concurrency must be within 1..5")
     model = str(payload.get("model") or "gpt-5.6").strip()
     if not model or MODEL_RE.fullmatch(model) is None:
         raise OracleStateError("MODEL_INVALID", "model must be one safe Oracle browser model label")
@@ -355,16 +438,16 @@ def load_manifest(path: Path, *, platform_name: str | None = None) -> OracleConf
     if model_strategy not in {"select", "current", "ignore"}:
         raise OracleStateError("MODEL_STRATEGY_INVALID", "model_strategy must be select, current, or ignore")
     thinking_time = str(payload.get("thinking_time") or "heavy").strip().casefold()
-    if thinking_time not in {"light", "standard", "extended", "heavy"}:
+    if thinking_time not in {"light", "standard", "extended", "extra-high", "heavy"}:
         raise OracleStateError(
             "THINKING_TIME_INVALID",
-            "thinking_time must be light, standard, extended, or heavy",
+            "thinking_time must be light, standard, extended, extra-high, or heavy",
         )
-    if transport == "pro-attachment-only":
-        if model.casefold() != "gpt-5.5-pro":
+    if is_pro_transport(transport):
+        if model.casefold() != "gpt-5.6-sol":
             raise OracleStateError(
                 "PRO_MODEL_INVALID",
-                "Pro attachment-only runs require Oracle's current Pro alias gpt-5.5-pro; no downgrade is allowed",
+                "Pro attachment-only runs require GPT-5.6 Sol with an explicitly verified Pro effort; no downgrade is allowed",
                 {"model": model},
             )
         if model_strategy != "select":
@@ -403,7 +486,7 @@ def load_manifest(path: Path, *, platform_name: str | None = None) -> OracleConf
     research = str(payload.get("research") or "off").strip().casefold()
     if research not in {"off", "deep"}:
         raise OracleStateError("RESEARCH_INVALID", "research must be off or deep")
-    if transport == "pro-attachment-only" and research != "off":
+    if is_pro_transport(transport) and research != "off":
         raise OracleStateError("PRO_RESEARCH_FORBIDDEN", "Pro attachment-only runs do not enable research mode")
     archive = str(payload.get("archive") or "auto").strip().casefold()
     if archive not in {"auto", "always", "never"}:
@@ -414,10 +497,15 @@ def load_manifest(path: Path, *, platform_name: str | None = None) -> OracleConf
             "TASK_OUTCOME_CONTRACT_INVALID",
             "task_outcome_contract must be legacy or v1",
         )
-    if transport == "pro-attachment-only" and task_outcome_contract != "legacy":
+    if is_attachment_transport(transport) and task_outcome_contract != "legacy":
         raise OracleStateError(
             "PRO_TASK_OUTCOME_CONTRACT_FORBIDDEN",
             "Pro attachment-only output is not wrapped in the DevSpace task outcome contract",
+        )
+    if is_pro_readonly_transport(transport) and task_outcome_contract != "v1":
+        raise OracleStateError(
+            "PRO_DEVSPACE_TASK_OUTCOME_CONTRACT_REQUIRED",
+            "Pro DevSpace output requires the v1 task outcome contract",
         )
     parallel_parent_raw = str(payload.get("parallel_parent_id") or "").strip().casefold()
     parallel_parent_id = parallel_parent_raw or None
@@ -426,6 +514,9 @@ def load_manifest(path: Path, *, platform_name: str | None = None) -> OracleConf
     requested_run_id = str(payload.get("run_id") or "").strip() or None
     if requested_run_id is not None and RUN_ID_RE.fullmatch(requested_run_id) is None:
         raise OracleStateError("RUN_ID_INVALID", "run_id must be a safe 8-96 character identifier")
+    provenance_raw = payload.get("web_multi_child_provenance_path")
+    provenance_path = exact_regular_file(provenance_raw, label="web_multi_child_provenance_path") if provenance_raw else None
+    provenance_sha256 = sha256_file(provenance_path) if provenance_path else None
     return OracleConfig(
         project_root,
         mission_path,
@@ -439,6 +530,11 @@ def load_manifest(path: Path, *, platform_name: str | None = None) -> OracleConf
         oracle_command,
         validate_oracle_args(payload.get("oracle_args")),
         timeout,
+        policy["soft_checkpoint_seconds"],
+        policy["handoff_seconds"],
+        policy["observed_platform_limit_seconds"],
+        policy["max_total_concurrency"],
+        policy["web_answer_budget_seconds"],
         model,
         model_strategy,
         thinking_time,
@@ -448,11 +544,13 @@ def load_manifest(path: Path, *, platform_name: str | None = None) -> OracleConf
         task_outcome_contract,
         parallel_parent_id,
         requested_run_id,
+        provenance_path,
+        provenance_sha256,
     )
 
 
 def composer_prompt(config: OracleConfig, mission_path: Path | None = None) -> str:
-    if config.transport == "pro-attachment-only":
+    if is_attachment_transport(config.transport):
         identity_material = "\0".join((
             str(config.project_root).casefold(),
             config.mission_sha256,
@@ -464,6 +562,15 @@ def composer_prompt(config: OracleConfig, mission_path: Path | None = None) -> s
             f"Task identity: oracle-pro-{identity}."
         )
     effective_path = config.mission_path if mission_path is None else mission_path
+    if is_pro_readonly_transport(config.transport):
+        return (
+            f"@{config.app_name} Read the read-only mission file: {effective_path}. "
+            "Use only the exact project root recorded there; read the mission and applicable AGENTS.md fully first. "
+            "Perform read-only work only; do not modify files, settings, accounts, or external state. "
+            "Put every citation, footnote, and Markdown reference definition before the outcome marker. "
+            "End the final response with exactly one of TASK_OUTCOME: EXECUTED, TASK_OUTCOME: NOT_EXECUTED, or "
+            "TASK_OUTCOME: BLOCKED as the final nonempty line; append nothing after it."
+        )
     # Keep the Windows npx.cmd prompt in one argument line. A literal newline
     # truncates the prompt after the app mention before Oracle receives it.
     return (
@@ -472,8 +579,9 @@ def composer_prompt(config: OracleConfig, mission_path: Path | None = None) -> s
         "작업공간 열기가 시간 초과되면 동일한 정확한 루트만 한 번 재시도하며 상위·하위·현재 활성 "
         "작업공간이나 셸 경계 우회로 대체하지 마세요."
         + (
-            " 마지막 줄에 실제 작업 수행 결과를 TASK_OUTCOME: EXECUTED, "
-            "TASK_OUTCOME: NOT_EXECUTED, TASK_OUTCOME: BLOCKED 중 하나로 정확히 기록하세요."
+            " 모든 인용, 각주, Markdown 참조 정의를 결과 마커 앞에 배치하세요. 마지막 비어 있지 않은 줄에 "
+            "실제 작업 수행 결과를 TASK_OUTCOME: EXECUTED, TASK_OUTCOME: NOT_EXECUTED, "
+            "TASK_OUTCOME: BLOCKED 중 하나로 정확히 기록하고 그 뒤에는 아무것도 추가하지 마세요."
             if config.task_outcome_contract == "v1"
             else ""
         )
@@ -516,10 +624,22 @@ def state_payload(config: OracleConfig, layout: RunLayout, *, status: str, resol
             "archive": config.archive,
         },
         "parallel_parent_id": config.parallel_parent_id,
+        "requested_run_id": config.requested_run_id,
+        "web_multi_child_provenance": (
+            {"path": str(config.web_multi_child_provenance_path), "sha256": config.web_multi_child_provenance_sha256}
+            if config.web_multi_child_provenance_path else None
+        ),
         "transport_status": "prepared",
         "task_outcome_contract": config.task_outcome_contract,
-        "task_outcome": "not_applicable" if config.transport == "pro-attachment-only" else "pending",
+        "task_outcome": "not_applicable" if is_attachment_transport(config.transport) else "pending",
         "task_outcome_reason": None,
+        "episode_policy": {
+            "soft_checkpoint_seconds": config.soft_checkpoint_seconds,
+            "handoff_seconds": config.handoff_seconds,
+            "observed_platform_limit_seconds": config.observed_platform_limit_seconds,
+            "max_total_concurrency": config.max_total_concurrency,
+            "web_answer_budget_seconds": config.web_answer_budget_seconds,
+        },
         "mission": {
             "path": str(config.mission_path),
             "transport_path": str(layout.run_dir / "mission.md"),
@@ -553,7 +673,12 @@ def state_payload(config: OracleConfig, layout: RunLayout, *, status: str, resol
 def host_uptime_ms(*, platform_name: str | None = None) -> int:
     platform = os.name if platform_name is None else platform_name
     if platform == "nt":
-        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        win_dll = getattr(ctypes, "WinDLL", None)
+        if win_dll is None:
+            # Unit tests exercise Windows argv construction from POSIX hosts.
+            # The actual Windows runtime always provides ctypes.WinDLL.
+            return int(time.monotonic() * 1000)
+        kernel32 = win_dll("kernel32", use_last_error=True)
         kernel32.GetTickCount64.restype = ctypes.c_ulonglong
         return int(kernel32.GetTickCount64())
     return int(time.monotonic() * 1000)
@@ -660,6 +785,9 @@ def update_state(
     task_outcome: str | None = None,
     task_outcome_reason: str | None = None,
     host_watchdog: dict[str, Any] | None = None,
+    conversation_url: str | None = None,
+    conversation_url_conflict: dict[str, str] | None = None,
+    exact_live_observation: bool = False,
 ) -> dict[str, Any]:
     if status not in STATUSES:
         raise OracleStateError("STATUS_INVALID", "invalid Oracle run status")
@@ -672,10 +800,22 @@ def update_state(
         current_authority = str(payload.get("session_authority") or "")
         current_rank = SESSION_AUTHORITY_RANK.get(current_authority, -1)
         requested_rank = SESSION_AUTHORITY_RANK.get(session_authority, -1)
-        payload["session_authority"] = (
-            current_authority if current_rank > requested_rank else session_authority
+        # A terminal observation without a harvested artifact is provisional:
+        # an exact later live observation is stronger evidence that the same
+        # conversation is still generating.  Never apply this exception to a
+        # durably harvested terminal result.
+        restore_live = (
+            exact_live_observation
+            and current_authority == "terminal_observed"
+            and session_authority == "live"
+            and payload.get("terminal_harvested") is not True
         )
-        if current_rank > requested_rank and status == "running":
+        payload["session_authority"] = (
+            session_authority
+            if restore_live or current_rank <= requested_rank
+            else current_authority
+        )
+        if current_rank > requested_rank and not restore_live and status == "running":
             payload["status"] = (
                 "complete"
                 if current_authority == "terminal" and payload.get("terminal_harvested") is True
@@ -693,6 +833,18 @@ def update_state(
         payload["task_outcome_reason"] = task_outcome_reason
     if host_watchdog is not None:
         payload["host_watchdog"] = host_watchdog
+    if conversation_url is not None:
+        oracle = payload.get("oracle") if isinstance(payload.get("oracle"), dict) else {}
+        existing_url = str(oracle.get("conversation_url") or "").strip()
+        if existing_url and existing_url != conversation_url:
+            payload["conversation_url_conflict"] = {
+                "persisted": existing_url,
+                "observed": conversation_url,
+            }
+        else:
+            payload["oracle"] = {**oracle, "conversation_url": conversation_url}
+    if conversation_url_conflict is not None:
+        payload["conversation_url_conflict"] = dict(conversation_url_conflict)
     write_json_atomic(state_path, payload)
     return payload
 
@@ -734,7 +886,7 @@ def _artifact_bytes(state: dict[str, Any], name: str) -> tuple[Path, bytes] | No
         return None
 
 
-def _user_confirmable_no_submission_evidence(state_path: Path) -> dict[str, Any] | None:
+def _comprehensive_no_submission_evidence(state_path: Path) -> dict[str, Any] | None:
     """Return exact evidence for a user-adjudicable Oracle composer timeout.
 
     The Oracle message is not mechanical proof of non-submission.  This helper
@@ -915,6 +1067,379 @@ def _user_confirmable_no_submission_evidence(state_path: Path) -> dict[str, Any]
     }
 
 
+def _web_multi_child_provenance(
+    state: dict[str, Any], run_dir: Path, project_root: Path, source_path: Path, parent_id: str, locator: str,
+) -> dict[str, Any] | None:
+    """Validate new provenance, or the exact legacy result/lane pair when present."""
+    raw = state.get("web_multi_child_provenance")
+    candidates: list[tuple[Path, dict[str, Any] | None, Path | None]] = []
+    if isinstance(raw, dict):
+        path = Path(str(raw.get("path") or ""))
+        try:
+            if not path.is_absolute() or path.is_symlink() or hashlib.sha256(path.read_bytes()).hexdigest() != str(raw.get("sha256") or ""):
+                return None
+            candidates.append((path, json.loads(path.read_text(encoding="utf-8", errors="strict")), None))
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+            return None
+    else:
+        # Legacy Oracle Multi did not copy lane provenance into state.  Its
+        # run-owned result entry and lane manifest are sufficient only when
+        # they identify this exact run directory and Oracle locator.
+        for result_path in project_root.glob("runtime/*/oracle_output/result.json"):
+            try:
+                result = json.loads(result_path.read_text(encoding="utf-8", errors="strict"))
+                lanes = result.get("lanes") if isinstance(result.get("lanes"), list) else []
+                matching = [lane for lane in lanes if isinstance(lane, dict) and Path(str(lane.get("run_dir") or "")).resolve() == run_dir and str(lane.get("session_locator") or "") == locator]
+                if result.get("schema") != "codex.chatgpt.oracle-multi-result/v1" or str(result.get("parent_id") or "") != parent_id or len(matching) != 1:
+                    continue
+                lane_id = str(matching[0].get("id") or "")
+                lane_manifest = result_path.parent / "lanes" / lane_id / "oracle.json"
+                candidates.append((lane_manifest, json.loads(lane_manifest.read_text(encoding="utf-8", errors="strict")), result_path))
+            except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+                return None
+    if len(candidates) != 1:
+        return None
+    path, value, legacy_result_path = candidates[0]
+    if not isinstance(value, dict):
+        return None
+    if value.get("schema") == "codex.chatgpt.oracle-multi-child-provenance/v1":
+        parent_manifest = Path(str(value.get("parent_manifest_path") or ""))
+        try:
+            if hashlib.sha256(parent_manifest.read_bytes()).hexdigest() != str(value.get("parent_manifest_sha256") or ""):
+                return None
+            parent = json.loads(parent_manifest.read_text(encoding="utf-8", errors="strict"))
+            lanes = parent.get("solvers") if isinstance(parent.get("solvers"), list) else []
+            lane = next((item for item in lanes if isinstance(item, dict) and str(item.get("id") or "") == str(value.get("lane_id") or "")), None)
+            if not isinstance(lane, dict) or parent.get("schema") != "codex.chatgpt.oracle-multi/v1":
+                return None
+            if Path(str(parent.get("project_root") or "")).resolve() != project_root or Path(str(lane.get("mission_path") or "")).resolve() != source_path:
+                return None
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+            return None
+    else:
+        lane = value
+    if str(value.get("parent_id") or value.get("parallel_parent_id") or "") != parent_id:
+        return None
+    if Path(str(value.get("project_root") or "")).resolve() != project_root or Path(str(value.get("mission_path") or "")).resolve() != source_path:
+        return None
+    if value.get("schema") == "codex.chatgpt.oracle-multi-child-provenance/v1":
+        return {
+            "provenance_mode": "new-child-provenance/v1",
+            "child_provenance_path": str(path.resolve()), "child_provenance_sha256": sha256_file(path),
+            "parent_manifest_path": str(parent_manifest.resolve()), "parent_manifest_sha256": sha256_file(parent_manifest),
+        }
+    if legacy_result_path is None:
+        return None
+    return {
+        "provenance_mode": "legacy-result-lane/v1",
+        "legacy_result_path": str(legacy_result_path.resolve()), "legacy_result_sha256": sha256_file(legacy_result_path),
+        "legacy_lane_manifest_path": str(path.resolve()), "legacy_lane_manifest_sha256": sha256_file(path),
+    }
+
+
+def _web_multi_child_no_submission_evidence(state_path: Path) -> dict[str, Any] | None:
+    """Return fail-closed settlement evidence for a direct Oracle Multi child."""
+    state = load_state(state_path)
+    if str(state.get("session_authority") or "") not in {"submitted_unknown", "pre_submit"}:
+        return None
+    parent_id = str(state.get("parallel_parent_id") or "").strip().casefold()
+    run_id = str(state.get("run_id") or "")
+    if PARENT_ID_RE.fullmatch(parent_id) is None or WEB_MULTI_CHILD_RUN_ID_RE.fullmatch(run_id) is None or state.get("requested_run_id") is not None:
+        return None
+    if state.get("terminal_harvested") is True or _state_has_conversation_url(state):
+        return None
+    run_dir = state_path.parent
+    artifacts = state.get("artifacts") if isinstance(state.get("artifacts"), dict) else {}
+    output = Path(str(artifacts.get("output") or ""))
+    if output.resolve() != (run_dir / "output.md").resolve() or output.is_symlink() or output_is_nonempty(output):
+        return None
+    stdout_record = _artifact_bytes(state, "stdout")
+    stderr_record = _artifact_bytes(state, "stderr")
+    if stdout_record is None or stderr_record is None:
+        return None
+    stdout_path, stdout_bytes = stdout_record
+    stderr_path, stderr_bytes = stderr_record
+    if (stdout_path.resolve() != (run_dir / "stdout.log").resolve() or stderr_path.resolve() != (run_dir / "stderr.log").resolve() or stdout_path.is_symlink() or stderr_path.is_symlink()):
+        return None
+    try:
+        stdout_text = stdout_bytes.decode("utf-8", errors="strict")
+        stderr_text = stderr_bytes.decode("utf-8", errors="strict")
+    except UnicodeDecodeError:
+        return None
+    transcript_record = _artifact_bytes(state, "transcript")
+    if transcript_record is None:
+        return None
+    transcript_path, transcript_bytes = transcript_record
+    try:
+        transcript_text = transcript_bytes.decode("utf-8", errors="strict")
+    except UnicodeDecodeError:
+        return None
+    if transcript_path.resolve() != (run_dir / "transcript.md").resolve() or transcript_path.is_symlink() or any(CHATGPT_CONVERSATION_URL_RE.search(text) for text in (stdout_text, stderr_text, transcript_text)):
+        return None
+    oracle = state.get("oracle") if isinstance(state.get("oracle"), dict) else {}
+    locator = str(oracle.get("session_locator") or oracle.get("slug") or "").strip()
+    if not locator or ORACLE_PROMPT_NOT_OBSERVED_MARKER not in stdout_text or f"Session: {locator}" not in stdout_text:
+        return None
+    mission = state.get("mission") if isinstance(state.get("mission"), dict) else {}
+    source_path = Path(str(mission.get("path") or ""))
+    transport_path = Path(str(mission.get("transport_path") or ""))
+    try:
+        project_root = Path(str(state.get("project_root") or "")).resolve(strict=True)
+        if not project_root.is_dir() or not source_path.is_absolute() or not transport_path.is_absolute() or source_path.is_symlink() or transport_path.is_symlink():
+            return None
+        source_path = source_path.resolve(strict=True)
+        transport_path = transport_path.resolve(strict=True)
+        if not source_path.is_file() or transport_path != (run_dir / "mission.md").resolve() or not is_within(project_root, source_path):
+            return None
+        source_bytes = source_path.read_bytes()
+        transport_bytes = transport_path.read_bytes()
+    except OSError:
+        return None
+    mission_sha256 = str(mission.get("sha256") or "")
+    source_sha256 = hashlib.sha256(source_bytes).hexdigest()
+    transport_sha256 = hashlib.sha256(transport_bytes).hexdigest()
+    if not re.fullmatch(r"[a-f0-9]{64}", mission_sha256) or source_sha256 != mission_sha256 or transport_sha256 != mission_sha256 or source_bytes != transport_bytes:
+        return None
+    provenance = _web_multi_child_provenance(state, run_dir, project_root, source_path, parent_id, locator)
+    if provenance is None:
+        return None
+    recovery_records: list[dict[str, str]] = []
+    for recovery_stdout in sorted(run_dir.glob("recovery-*-stdout.log"), key=lambda item: item.name):
+        recovery_stderr = recovery_stdout.with_name(recovery_stdout.name.replace("-stdout.log", "-stderr.log"))
+        try:
+            if recovery_stdout.is_symlink() or recovery_stderr.is_symlink():
+                continue
+            recovery_stdout_bytes = recovery_stdout.read_bytes()
+            recovery_stderr_bytes = recovery_stderr.read_bytes()
+            recovery_text = b"\n".join((recovery_stdout_bytes, recovery_stderr_bytes)).decode("utf-8", errors="strict")
+        except (OSError, UnicodeDecodeError):
+            return None
+        if CHATGPT_CONVERSATION_URL_RE.search(recovery_text) or ORACLE_RECOVERY_STATE_RE.search(recovery_text) or ORACLE_NO_LIVE_TAB_MARKER not in recovery_text or f'"{locator}"' not in recovery_text or ORACLE_NO_RECOVERABLE_URL_MARKER not in recovery_text:
+            return None
+        recovery_records.append({"stdout_name": recovery_stdout.name, "stdout_sha256": hashlib.sha256(recovery_stdout_bytes).hexdigest(), "stderr_name": recovery_stderr.name, "stderr_sha256": hashlib.sha256(recovery_stderr_bytes).hexdigest()})
+    if not recovery_records:
+        return None
+    return {
+        "settlement_eligibility": "oracle-web-multi-child/v1",
+        "project_root": str(project_root), "run_id": run_id, "parallel_parent_id": parent_id,
+        "source_mission_path": str(source_path), "source_mission_sha256": source_sha256,
+        "transport_mission_path": str(transport_path), "transport_mission_sha256": transport_sha256,
+        "mission_sha256": mission_sha256, "oracle_locator": locator,
+        **provenance,
+        "stdout_sha256": hashlib.sha256(stdout_bytes).hexdigest(), "stderr_sha256": hashlib.sha256(stderr_bytes).hexdigest(),
+        "recovery_evidence": recovery_records, "output_absent": True, "conversation_url_absent": True,
+        "_source_mission_path": str(source_path), "_transport_mission_path": str(transport_path),
+    }
+
+
+def _settlement_logs_have_conversation_url(state_path: Path) -> bool:
+    state = load_state(state_path)
+    for name in ("stdout", "stderr"):
+        record = _artifact_bytes(state, name)
+        if record is None:
+            continue
+        try:
+            if CHATGPT_CONVERSATION_URL_RE.search(record[1].decode("utf-8", errors="strict")):
+                return True
+        except UnicodeDecodeError:
+            return True
+    artifacts = state.get("artifacts") if isinstance(state.get("artifacts"), dict) else {}
+    transcript_raw = str(artifacts.get("transcript") or "").strip()
+    canonical_transcript = state_path.parent / "transcript.md"
+    if transcript_raw:
+        try:
+            if Path(transcript_raw).resolve() != canonical_transcript.resolve():
+                return True
+        except OSError:
+            return True
+    if canonical_transcript.is_symlink():
+        return True
+    if canonical_transcript.exists():
+        try:
+            if CHATGPT_CONVERSATION_URL_RE.search(canonical_transcript.read_text(encoding="utf-8", errors="strict")):
+                return True
+        except (OSError, UnicodeDecodeError):
+            return True
+    try:
+        for path in state_path.parent.glob("recovery-*-*.log"):
+            if path.is_symlink() or CHATGPT_CONVERSATION_URL_RE.search(path.read_text(encoding="utf-8", errors="strict")):
+                return True
+    except (OSError, UnicodeDecodeError):
+        return True
+    return False
+
+
+def _standalone_pro_no_submission_evidence(state_path: Path) -> dict[str, Any] | None:
+    """Return bounded evidence for user adjudication of one qualified Pro run."""
+    state = load_state(state_path)
+    run_dir = state_path.parent
+    run_id = str(state.get("run_id") or "")
+    profile = state.get("profile") if isinstance(state.get("profile"), dict) else {}
+    if (
+        state.get("schema") != "codex.chatgpt.oracle-run-state/v1"
+        or str(state.get("session_authority") or "") not in {"submitted_unknown", "pre_submit"}
+        or state.get("status") != "attention_required"
+        or state.get("transport_status") not in {"failed", "not_submitted_user_confirmed"}
+        or state.get("task_outcome") != "pending"
+        or state.get("terminal_harvested") is True
+        or _state_has_conversation_url(state)
+        or int(state.get("exit_code") or 0) == 0
+        or str(state.get("mode") or "") != "browser"
+        or str(state.get("transport") or "") != "pro-devspace-readonly"
+        or state.get("parallel_parent_id") is not None
+        or state.get("requested_run_id") not in (None, run_id)
+        or state.get("web_multi_child_provenance") is not None
+        or state.get("attachments") not in (None, [])
+        or run_dir.name != run_id
+        or str(profile.get("model") or "") != "gpt-5.6-sol"
+        or str(profile.get("model_strategy") or "") != "select"
+        or str(profile.get("thinking_time") or "") != "heavy"
+    ):
+        return None
+    oracle = state.get("oracle") if isinstance(state.get("oracle"), dict) else {}
+    version = str(oracle.get("resolved_version") or "").removeprefix("oracle ").strip()
+    locator = str(oracle.get("session_locator") or oracle.get("slug") or "").strip()
+    if version not in ORACLE_STANDALONE_PRO_NO_SUBMISSION_VERSIONS or not locator:
+        return None
+    artifacts = state.get("artifacts") if isinstance(state.get("artifacts"), dict) else {}
+    output = Path(str(artifacts.get("output") or ""))
+    if output.resolve() != (run_dir / "output.md").resolve() or output.is_symlink() or output_is_nonempty(output):
+        return None
+    records = {name: _artifact_bytes(state, name) for name in ("stdout", "stderr", "transcript")}
+    if any(record is None for record in records.values()):
+        return None
+    stdout_path, stdout_bytes = records["stdout"]  # type: ignore[misc]
+    stderr_path, stderr_bytes = records["stderr"]  # type: ignore[misc]
+    transcript_path, transcript_bytes = records["transcript"]  # type: ignore[misc]
+    if (
+        stdout_path.resolve() != (run_dir / "stdout.log").resolve()
+        or stderr_path.resolve() != (run_dir / "stderr.log").resolve()
+        or transcript_path.resolve() != (run_dir / "transcript.md").resolve()
+        or any(path.is_symlink() for path in (stdout_path, stderr_path, transcript_path))
+        or stderr_bytes
+        or transcript_bytes != stdout_bytes
+    ):
+        return None
+    try:
+        stdout_text = stdout_bytes.decode("utf-8", errors="strict")
+    except UnicodeDecodeError:
+        return None
+    marker_lines = {
+        line.strip()
+        for line in stdout_text.splitlines()
+        if ORACLE_PROMPT_NOT_OBSERVED_MARKER in line
+    }
+    allowed_marker_lines = {
+        f"ERROR: {ORACLE_PROMPT_NOT_OBSERVED_MARKER}",
+        f"User error (browser-automation): {ORACLE_PROMPT_NOT_OBSERVED_MARKER}",
+    }
+    if (
+        not marker_lines
+        or not marker_lines.issubset(allowed_marker_lines)
+        or stdout_text.count(ORACLE_PROMPT_NOT_OBSERVED_MARKER) != len(marker_lines)
+        or f"Session: {locator}" not in stdout_text
+        or CHATGPT_CONVERSATION_URL_RE.search(stdout_text)
+    ):
+        return None
+    mission = state.get("mission") if isinstance(state.get("mission"), dict) else {}
+    source_path = Path(str(mission.get("path") or ""))
+    transport_path = Path(str(mission.get("transport_path") or ""))
+    try:
+        project_root = Path(str(state.get("project_root") or "")).resolve(strict=True)
+        source_path = source_path.resolve(strict=True)
+        transport_path = transport_path.resolve(strict=True)
+        if (
+            not project_root.is_dir()
+            or not source_path.is_file()
+            or source_path.is_symlink()
+            or transport_path.is_symlink()
+            or not is_within(project_root, source_path)
+            or transport_path != (run_dir / "mission.md").resolve()
+        ):
+            return None
+        source_bytes = source_path.read_bytes()
+        transport_bytes = transport_path.read_bytes()
+    except OSError:
+        return None
+    mission_sha256 = str(mission.get("sha256") or "")
+    source_sha256 = hashlib.sha256(source_bytes).hexdigest()
+    transport_sha256 = hashlib.sha256(transport_bytes).hexdigest()
+    if (
+        not re.fullmatch(r"[a-f0-9]{64}", mission_sha256)
+        or source_sha256 != mission_sha256
+        or transport_sha256 != mission_sha256
+        or source_bytes != transport_bytes
+    ):
+        return None
+    recovery_records: list[dict[str, str]] = []
+    for recovery_stdout in sorted(run_dir.glob("recovery-*-stdout.log"), key=lambda item: item.name):
+        recovery_stderr = recovery_stdout.with_name(recovery_stdout.name.replace("-stdout.log", "-stderr.log"))
+        try:
+            if recovery_stdout.is_symlink() or recovery_stderr.is_symlink():
+                return None
+            recovery_stdout_bytes = recovery_stdout.read_bytes()
+            recovery_stderr_bytes = recovery_stderr.read_bytes()
+            recovery_text = b"\n".join((recovery_stdout_bytes, recovery_stderr_bytes)).decode("utf-8", errors="strict")
+        except (OSError, UnicodeDecodeError):
+            return None
+        if (
+            CHATGPT_CONVERSATION_URL_RE.search(recovery_text)
+            or ORACLE_RECOVERY_STATE_RE.search(recovery_text)
+            or ORACLE_NO_LIVE_TAB_MARKER not in recovery_text
+            or f'"{locator}"' not in recovery_text
+            or ORACLE_NO_RECOVERABLE_URL_MARKER not in recovery_text
+        ):
+            return None
+        recovery_records.append({
+            "stdout_name": recovery_stdout.name,
+            "stdout_sha256": hashlib.sha256(recovery_stdout_bytes).hexdigest(),
+            "stderr_name": recovery_stderr.name,
+            "stderr_sha256": hashlib.sha256(recovery_stderr_bytes).hexdigest(),
+        })
+    if not recovery_records:
+        return None
+    return {
+        "settlement_eligibility": "oracle-standalone-qualified-pro/v1",
+        "project_root": str(project_root),
+        "run_id": run_id,
+        "transport": "pro-devspace-readonly",
+        "source_mission_path": str(source_path),
+        "source_mission_sha256": source_sha256,
+        "transport_mission_path": str(transport_path),
+        "transport_mission_sha256": transport_sha256,
+        "mission_sha256": mission_sha256,
+        "oracle_locator": locator,
+        "oracle_version": version,
+        "stdout_sha256": hashlib.sha256(stdout_bytes).hexdigest(),
+        "stderr_sha256": hashlib.sha256(stderr_bytes).hexdigest(),
+        "recovery_evidence": recovery_records,
+        "output_absent": True,
+        "conversation_url_absent": True,
+        "_source_mission_path": str(source_path),
+        "_transport_mission_path": str(transport_path),
+    }
+
+
+def _user_confirmable_no_submission_evidence(state_path: Path) -> dict[str, Any] | None:
+    """Return exact evidence for supported user-adjudicable Oracle runs."""
+    if _settlement_logs_have_conversation_url(state_path):
+        return None
+    comprehensive = _comprehensive_no_submission_evidence(state_path)
+    if comprehensive is not None:
+        return comprehensive
+    standalone_pro = _standalone_pro_no_submission_evidence(state_path)
+    if standalone_pro is not None:
+        return standalone_pro
+    try:
+        mission_text = (state_path.parent / "mission.md").read_text(encoding="utf-8", errors="strict")
+    except (OSError, UnicodeDecodeError):
+        return None
+    # A partial or malformed comprehensive contract must never fall through.
+    if "[HOST_STAGE_CONTRACT]" in mission_text or "[DEVSPACE_WORKSPACE_ENTRY_CONTRACT]" in mission_text:
+        return None
+    return _web_multi_child_no_submission_evidence(state_path)
+
+
 def proven_user_confirmed_no_submission(state_path: Path) -> dict[str, Any] | None:
     """Revalidate a persisted user confirmation against immutable run artifacts."""
     state = load_state(state_path)
@@ -948,10 +1473,6 @@ def proven_user_confirmed_no_submission(state_path: Path) -> dict[str, Any] | No
     for key in (
         "project_root",
         "run_id",
-        "workflow_id",
-        "stage",
-        "attempt_id",
-        "input_mission_sha256",
         "mission_sha256",
         "oracle_locator",
         "stdout_sha256",
@@ -962,12 +1483,28 @@ def proven_user_confirmed_no_submission(state_path: Path) -> dict[str, Any] | No
     ):
         if recorded.get(key) != current.get(key):
             return None
-    return {
-        **recorded,
-        "_augmented_mission_path": current["_augmented_mission_path"],
-        "_input_mission_path": current["_input_mission_path"],
-        "_receipt_path": current["_receipt_path"],
-    }
+    if current.get("settlement_eligibility") == "oracle-standalone-qualified-pro/v1":
+        required = (
+            "settlement_eligibility", "transport", "source_mission_path",
+            "source_mission_sha256", "transport_mission_path", "transport_mission_sha256",
+            "oracle_version",
+        )
+    elif current.get("settlement_eligibility") == "oracle-web-multi-child/v1":
+        required = (
+            "settlement_eligibility", "parallel_parent_id", "source_mission_path",
+            "source_mission_sha256", "transport_mission_path", "transport_mission_sha256",
+        )
+        if current.get("provenance_mode") == "new-child-provenance/v1":
+            required += ("provenance_mode", "child_provenance_path", "child_provenance_sha256", "parent_manifest_path", "parent_manifest_sha256")
+        elif current.get("provenance_mode") == "legacy-result-lane/v1":
+            required += ("provenance_mode", "legacy_result_path", "legacy_result_sha256", "legacy_lane_manifest_path", "legacy_lane_manifest_sha256")
+        else:
+            return None
+    else:
+        required = ("workflow_id", "stage", "attempt_id", "input_mission_sha256")
+    if any(recorded.get(key) != current.get(key) for key in required):
+        return None
+    return {**recorded, **{key: value for key, value in current.items() if key.startswith("_")}}
 
 
 def settle_user_confirmed_no_submission(
@@ -1033,6 +1570,70 @@ def settle_user_confirmed_no_submission(
     return payload
 
 
+def proven_user_confirmed_execution_ended(state_path: Path) -> dict[str, Any] | None:
+    """Revalidate the narrow post-submit timeout settlement before releasing a lock."""
+    state = load_state(state_path)
+    reference = state.get("user_confirmed_execution_ended")
+    expected_path = state_path.parent / "user-confirmed-execution-ended.json"
+    if (
+        not isinstance(reference, dict)
+        or reference.get("schema") != "codex.chatgpt.oracle-settlement-reference/v1"
+        or Path(str(reference.get("path") or "")).resolve() != expected_path.resolve()
+        or expected_path.is_symlink()
+    ):
+        return None
+    try:
+        raw = expected_path.read_bytes()
+        if sha256_file(expected_path) != str(reference.get("sha256") or ""):
+            return None
+        recorded = json.loads(raw.decode("utf-8", errors="strict"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+        return None
+    if (
+        recorded.get("schema") != "codex.chatgpt.oracle-user-confirmed-execution-ended/v1"
+        or recorded.get("code") != "ORACLE_USER_CONFIRMED_EXECUTION_ENDED"
+        or recorded.get("confirmation") != USER_CONFIRMED_EXECUTION_ENDED
+        or not str(recorded.get("reason") or "").strip()
+        or str(state.get("session_authority") or "") != "settled_executed"
+        or state.get("terminal_harvested") is not False
+        or str(state.get("transport_status") or "") != "post_submit_provider_delivery_timeout_settled"
+        or str(state.get("task_outcome") or "") != "executed"
+    ):
+        return None
+    artifacts = state.get("artifacts") if isinstance(state.get("artifacts"), dict) else {}
+    output = Path(str(artifacts.get("output") or ""))
+    project_root = Path(str(state.get("project_root") or ""))
+    if (
+        not output.is_file()
+        or output.is_symlink()
+        or sha256_file(output) != str(recorded.get("output_sha256") or "")
+        or not project_root.is_dir()
+        or recorded.get("run_id") != state.get("run_id")
+        or recorded.get("project_root") != str(project_root.resolve())
+        or recorded.get("conversation_url") != str((state.get("oracle") or {}).get("conversation_url") or "")
+    ):
+        return None
+    evidence = recorded.get("execution_evidence")
+    if not isinstance(evidence, list) or not evidence:
+        return None
+    for item in evidence:
+        if not isinstance(item, dict):
+            return None
+        path = Path(str(item.get("path") or ""))
+        try:
+            resolved = path.resolve(strict=True)
+        except OSError:
+            return None
+        if (
+            path.is_symlink()
+            or not resolved.is_file()
+            or not is_within(project_root.resolve(), resolved)
+            or sha256_file(resolved) != str(item.get("sha256") or "")
+        ):
+            return None
+    return recorded
+
+
 def proven_pre_submit_rejection(state_path: Path) -> dict[str, Any] | None:
     """Return immutable evidence only for Oracle's own pre-submit prompt dedup rejection."""
     state = load_state(state_path)
@@ -1058,6 +1659,315 @@ def proven_pre_submit_rejection(state_path: Path) -> dict[str, Any] | None:
     }
 
 
+def proven_pre_submit_manual_login_profile_uninitialized(
+    state_path: Path,
+) -> dict[str, Any] | None:
+    """Prove Oracle 0.17.1 stopped before opening its manual-login profile.
+
+    This intentionally recognizes one exact upstream failure transcript.  A
+    different version, transport, profile, artifact layout, extra output, or
+    any conversation URL remains submitted-unknown and keeps the project lock.
+    """
+    state = load_state(state_path)
+    if str(state.get("session_authority") or "") not in {"pre_submit", "submitted_unknown"}:
+        return None
+    if state.get("terminal_harvested") is True or _state_has_conversation_url(state):
+        return None
+    if str(state.get("mode") or "") != "browser" or not is_pro_readonly_transport(
+        str(state.get("transport") or "")
+    ):
+        return None
+
+    profile = state.get("profile") if isinstance(state.get("profile"), dict) else {}
+    oracle = state.get("oracle") if isinstance(state.get("oracle"), dict) else {}
+    locator = str(oracle.get("session_locator") or oracle.get("slug") or "").strip()
+    if (
+        str(profile.get("model") or "") != "gpt-5.6-sol"
+        or str(profile.get("model_strategy") or "") != "select"
+        or str(profile.get("copy_profile") or "").strip()
+        or str(oracle.get("resolved_version") or "").removeprefix("oracle ").strip() != "0.17.1"
+        or not locator
+    ):
+        return None
+
+    run_dir = state_path.parent.resolve()
+    artifacts = state.get("artifacts") if isinstance(state.get("artifacts"), dict) else {}
+    canonical = {
+        "output": run_dir / "output.md",
+        "stdout": run_dir / "stdout.log",
+        "stderr": run_dir / "stderr.log",
+        "transcript": run_dir / "transcript.md",
+    }
+    resolved: dict[str, Path] = {}
+    try:
+        for name, expected in canonical.items():
+            path = Path(str(artifacts.get(name) or ""))
+            if not path.is_absolute() or path.is_symlink() or path.resolve() != expected:
+                return None
+            resolved[name] = path
+        # The known failure never creates output.md.  Even an empty output file
+        # is treated as contradictory evidence rather than guessed away.
+        if resolved["output"].exists():
+            return None
+        stdout_bytes = resolved["stdout"].read_bytes()
+        stderr_bytes = resolved["stderr"].read_bytes()
+        transcript_bytes = resolved["transcript"].read_bytes()
+        stdout_text = stdout_bytes.decode("utf-8", errors="strict")
+        stderr_text = stderr_bytes.decode("utf-8", errors="strict")
+    except (OSError, UnicodeDecodeError):
+        return None
+    if stderr_bytes or stderr_text or transcript_bytes != stdout_bytes:
+        return None
+    if _settlement_logs_have_conversation_url(state_path) or CHATGPT_CONVERSATION_URL_RE.search(
+        stdout_text
+    ):
+        return None
+
+    expected_profile = (Path.home() / ".oracle" / "browser-profile").resolve()
+    matches = list(ORACLE_MANUAL_LOGIN_PROFILE_UNINITIALIZED_RE.finditer(stdout_text))
+    if [match.group("prefix") for match in matches] != ["ERROR", "User error (browser-automation)"]:
+        return None
+    try:
+        if any(Path(match.group("profile")).resolve() != expected_profile for match in matches):
+            return None
+    except OSError:
+        return None
+
+    escaped_profile = str(expected_profile).replace("\\", "\\\\")
+    failure_tail = (
+        "ChatGPT browser manual-login profile is not initialized. "
+        f"Browser mode is using Oracle's private Chrome profile at {expected_profile}, "
+        "separate from your normal Chrome profile. Run first-time setup, sign in there, then retry: "
+        "oracle --engine browser --browser-manual-login --browser-keep-browser "
+        f'--browser-manual-login-profile-dir "{escaped_profile}" -p "HI". '
+        "If you want to reuse an already signed-in Chrome instead, use --browser-attach-running."
+    )
+    expected_errors = [f"ERROR: {failure_tail}", f"User error (browser-automation): {failure_tail}"]
+    lines = stdout_text.splitlines()
+    if lines[-2:] != expected_errors:
+        return None
+
+    prefix_lines = lines[:-2]
+    if len(prefix_lines) != 11:
+        return None
+    banner_ok = bool(re.fullmatch(r".{1,4} oracle 0\.17\.1 .{2,120}", prefix_lines[0]))
+    launch_ok = bool(
+        re.fullmatch(
+            r"Launching browser mode \(target=GPT-5\.6 Sol; requested=gpt-5\.6-sol\) "
+            r"with ~[1-9][0-9]* tokens\.",
+            prefix_lines[6],
+        )
+    )
+    if not (
+        banner_ok
+        and prefix_lines[1] == f"Session: {locator}"
+        and prefix_lines[2:6]
+        == [
+            "Mode: browser foreground",
+            "Models: 1",
+            "Detach: no",
+            f"Reattach: oracle session {locator}",
+        ]
+        and launch_ok
+        and prefix_lines[7:]
+        == [
+            "This run can take up to an hour (usually ~10 minutes).",
+            "[browser] Browser control: launch Chrome in hidden-window mode; may focus/control the browser UI.",
+            "[browser] Browser guidance: On macOS, Oracle launches Chrome off-screen while keeping the page rendered.",
+            "[browser] Browser guidance: For the calmest shared-desktop flow, prefer --browser-attach-running or --remote-chrome.",
+        ]
+    ):
+        return None
+
+    return {
+        "schema": "codex.chatgpt.oracle-pre-submit-host-failure/v1",
+        "code": "ORACLE_MANUAL_LOGIN_PROFILE_UNINITIALIZED_PRELAUNCH_FAILED",
+        "stdout_sha256": hashlib.sha256(stdout_bytes).hexdigest(),
+        "stderr_sha256": hashlib.sha256(stderr_bytes).hexdigest(),
+        "transcript_sha256": hashlib.sha256(transcript_bytes).hexdigest(),
+        "output_absent": True,
+        "conversation_url_absent": True,
+        "resolved_version": "0.17.1",
+        "oracle_locator": locator,
+        "failure_reason": "oracle-manual-login-profile-uninitialized",
+        "manual_login_profile": str(expected_profile),
+    }
+
+
+def proven_pre_submit_cdp_disconnect(state_path: Path) -> dict[str, Any] | None:
+    """Prove the bounded Oracle 0.17.1 CDP disconnect happened before send.
+
+    Oracle's generic disconnect text is not sufficient.  The external session
+    ledger must also bind the exact slug, record ``promptSubmitted=false`` on
+    both runtime copies, remain on the ChatGPT home URL, and contain the exact
+    recoverable-disconnect classification.  Any output, conversation URL,
+    changed version/profile, or contradictory metadata keeps the run locked.
+    """
+    state = load_state(state_path)
+    if str(state.get("session_authority") or "") not in {"pre_submit", "submitted_unknown"}:
+        return None
+    if state.get("terminal_harvested") is True or _state_has_conversation_url(state):
+        return None
+    if str(state.get("mode") or "") != "browser" or not is_pro_readonly_transport(
+        str(state.get("transport") or "")
+    ):
+        return None
+
+    profile = state.get("profile") if isinstance(state.get("profile"), dict) else {}
+    oracle = state.get("oracle") if isinstance(state.get("oracle"), dict) else {}
+    locator = str(oracle.get("session_locator") or oracle.get("slug") or "").strip()
+    expected_profile = (Path.home() / ".oracle" / "browser-profile").resolve()
+    try:
+        copy_profile = Path(str(profile.get("copy_profile") or "")).resolve()
+    except OSError:
+        return None
+    if (
+        str(profile.get("model") or "") != "gpt-5.6-sol"
+        or str(profile.get("model_strategy") or "") != "select"
+        or str(profile.get("thinking_time") or "") != "heavy"
+        or copy_profile != expected_profile
+        or str(oracle.get("resolved_version") or "").removeprefix("oracle ").strip() != "0.17.1"
+        or not locator
+    ):
+        return None
+
+    run_dir = state_path.parent.resolve()
+    artifacts = state.get("artifacts") if isinstance(state.get("artifacts"), dict) else {}
+    canonical = {
+        "output": run_dir / "output.md",
+        "stdout": run_dir / "stdout.log",
+        "stderr": run_dir / "stderr.log",
+        "transcript": run_dir / "transcript.md",
+    }
+    resolved: dict[str, Path] = {}
+    try:
+        for name, expected in canonical.items():
+            path = Path(str(artifacts.get(name) or ""))
+            if not path.is_absolute() or path.is_symlink() or path.resolve() != expected:
+                return None
+            resolved[name] = path
+        if resolved["output"].exists():
+            return None
+        stdout_bytes = resolved["stdout"].read_bytes()
+        stderr_bytes = resolved["stderr"].read_bytes()
+        transcript_bytes = resolved["transcript"].read_bytes()
+        stdout_text = stdout_bytes.decode("utf-8", errors="strict")
+    except (OSError, UnicodeDecodeError):
+        return None
+    if stderr_bytes or transcript_bytes != stdout_bytes:
+        return None
+    if _settlement_logs_have_conversation_url(state_path) or CHATGPT_CONVERSATION_URL_RE.search(
+        stdout_text
+    ):
+        return None
+
+    failure_lines = [
+        f"ERROR: {ORACLE_CDP_DISCONNECT_PRE_SUBMIT_ERROR}",
+        f"User error (browser-automation): {ORACLE_CDP_DISCONNECT_PRE_SUBMIT_ERROR}",
+    ]
+    lines = stdout_text.splitlines()
+    if len(lines) != 13 or lines[-2:] != failure_lines:
+        return None
+    if not (
+        re.fullmatch(r".{1,4} oracle 0\.17\.1 .{2,120}", lines[0])
+        and lines[1] == f"Session: {locator}"
+        and lines[2:6]
+        == [
+            "Mode: browser foreground",
+            "Models: 1",
+            "Detach: no",
+            f"Reattach: oracle session {locator}",
+        ]
+        and re.fullmatch(
+            r"Launching browser mode \(target=GPT-5\.6 Sol; requested=gpt-5\.6-sol\) "
+            r"with ~[1-9][0-9]* tokens\.",
+            lines[6],
+        )
+        and lines[7:11]
+        == [
+            "This run can take up to an hour (usually ~10 minutes).",
+            "[browser] Browser control: launch Chrome in hidden-window mode; may focus/control the browser UI.",
+            "[browser] Browser guidance: On macOS, Oracle launches Chrome off-screen while keeping the page rendered.",
+            "[browser] Browser guidance: For the calmest shared-desktop flow, prefer --browser-attach-running or --remote-chrome.",
+        ]
+    ):
+        return None
+
+    session_root = Path(
+        os.environ.get("ORACLE_SESSION_ROOT") or (Path.home() / ".oracle" / "sessions")
+    ).resolve()
+    meta_path = session_root / locator / "meta.json"
+    if meta_path.is_symlink():
+        return None
+    try:
+        meta_bytes = meta_path.read_bytes()
+        meta = json.loads(meta_bytes.decode("utf-8", errors="strict"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+        return None
+    browser = meta.get("browser") if isinstance(meta.get("browser"), dict) else {}
+    config = browser.get("config") if isinstance(browser.get("config"), dict) else {}
+    runtime = browser.get("runtime") if isinstance(browser.get("runtime"), dict) else {}
+    error = meta.get("error") if isinstance(meta.get("error"), dict) else {}
+    details = error.get("details") if isinstance(error.get("details"), dict) else {}
+    error_runtime = details.get("runtime") if isinstance(details.get("runtime"), dict) else {}
+    options = meta.get("options") if isinstance(meta.get("options"), dict) else {}
+    option_browser = (
+        options.get("browserConfig") if isinstance(options.get("browserConfig"), dict) else {}
+    )
+    project_root = Path(str(state.get("project_root") or ""))
+    try:
+        meta_cwd = Path(str(meta.get("cwd") or "")).resolve()
+        output_path = Path(str(options.get("writeOutputPath") or "")).resolve()
+        config_profile = Path(str(config.get("copyProfileSource") or "")).resolve()
+        option_profile = Path(str(option_browser.get("copyProfileSource") or "")).resolve()
+    except OSError:
+        return None
+    if (
+        meta.get("id") != locator
+        or meta.get("status") != "error"
+        or meta.get("model") != "gpt-5.6-sol"
+        or meta.get("mode") != "browser"
+        or not str(meta.get("completedAt") or "").strip()
+        or meta_cwd != project_root.resolve()
+        or config_profile != expected_profile
+        or option_profile != expected_profile
+        or config.get("desiredModel") != "GPT-5.6 Sol"
+        or config.get("modelStrategy") != "select"
+        or config.get("thinkingTime") != "heavy"
+        or options.get("model") != "gpt-5.6-sol"
+        or options.get("slug") != locator
+        or output_path != canonical["output"]
+        or runtime.get("promptSubmitted") is not False
+        or runtime.get("tabUrl") not in {None, "https://chatgpt.com/"}
+        or error.get("category") != "browser-automation"
+        or error.get("message") != ORACLE_CDP_DISCONNECT_PRE_SUBMIT_ERROR
+        or details.get("stage") != "connection-lost"
+        or details.get("recoverableDisconnect") is not True
+        or details.get("disconnectCause") != "cdp-client-disconnect"
+        or error_runtime.get("promptSubmitted") is not False
+        or error_runtime.get("tabUrl") != "https://chatgpt.com/"
+        or str(meta.get("errorMessage") or "") != ORACLE_CDP_DISCONNECT_PRE_SUBMIT_ERROR
+        or CHATGPT_CONVERSATION_URL_RE.search(meta_bytes.decode("utf-8", errors="strict"))
+    ):
+        return None
+
+    return {
+        "schema": "codex.chatgpt.oracle-pre-submit-ui-failure/v1",
+        "code": "ORACLE_CDP_DISCONNECT_PRE_SUBMIT_FAILED",
+        "oracle_locator": locator,
+        "stdout_sha256": hashlib.sha256(stdout_bytes).hexdigest(),
+        "stderr_sha256": hashlib.sha256(stderr_bytes).hexdigest(),
+        "transcript_sha256": hashlib.sha256(transcript_bytes).hexdigest(),
+        "oracle_meta_path": str(meta_path),
+        "oracle_meta_sha256": hashlib.sha256(meta_bytes).hexdigest(),
+        "output_absent": True,
+        "conversation_url_absent": True,
+        "prompt_submitted": False,
+        "resolved_version": "0.17.1",
+        "failure_reason": "oracle-cdp-client-disconnect-before-submit",
+    }
+
+
 def proven_pre_submit_host_failure(state_path: Path) -> dict[str, Any] | None:
     """Prove a host failure happened before Oracle/browser launch.
 
@@ -1065,13 +1975,14 @@ def proven_pre_submit_host_failure(state_path: Path) -> dict[str, Any] | None:
     process is created.  The additional immutable-state checks keep this from
     reclassifying a real submitted or live session.
     """
+    manual_login = proven_pre_submit_manual_login_profile_uninitialized(state_path)
+    if manual_login is not None:
+        return manual_login
     state = load_state(state_path)
     authority = str(state.get("session_authority") or "")
     if authority not in {"pre_submit", "submitted_unknown"}:
         return None
     oracle = state.get("oracle") if isinstance(state.get("oracle"), dict) else {}
-    if str(oracle.get("resolved_version") or "") != "unresolved":
-        return None
     if _state_has_conversation_url(state):
         return None
     artifacts = state.get("artifacts") if isinstance(state.get("artifacts"), dict) else {}
@@ -1084,28 +1995,268 @@ def proven_pre_submit_host_failure(state_path: Path) -> dict[str, Any] | None:
         return None
     _, stdout_bytes = stdout_record
     _, stderr_bytes = stderr_record
-    if stdout_bytes.strip():
+    # Oracle prints this version banner before validating local attachments;
+    # it is not browser/session evidence.  Any other stdout remains fail-closed.
+    stdout_text = stdout_bytes.decode("utf-8", errors="replace").strip()
+    attachment_limit_banner_only = stdout_text == "🧿 oracle 0.17.1 — Questions in, clarity out."
+    if stdout_text and not attachment_limit_banner_only:
         return None
     try:
         stderr_text = stderr_bytes.decode("utf-8", errors="strict")
     except UnicodeDecodeError:
         return None
     normalized_error = stderr_text.lstrip()
-    if not normalized_error.startswith("version resolution failed:"):
+    if (
+        is_attachment_transport(str(state.get("transport") or ""))
+        and "The following files exceed the 1 MB limit:" in normalized_error
+        and attachment_limit_banner_only
+    ):
+        attachments = state.get("attachments")
+        if not isinstance(attachments, list) or not any(
+            isinstance(item, dict) and int(item.get("size_bytes") or 0) > 1024 * 1024
+            for item in attachments
+        ):
+            return None
+        failure_reason = "oracle-attachment-size-limit"
+        code = "ORACLE_ATTACHMENT_SIZE_PRELAUNCH_FAILED"
+    elif str(oracle.get("resolved_version") or "") != "unresolved":
         return None
-    if not (
+    elif not normalized_error.startswith("version resolution failed:"):
+        return None
+    elif "Oracle compatibility is validated only for the tested version" in normalized_error:
+        failure_reason = "compatibility-version-drift"
+        code = "ORACLE_VERSION_RESOLUTION_PRELAUNCH_FAILED"
+    elif (
         "ORACLE_VERSION_TIMEOUT:" in normalized_error
         or ("--version" in normalized_error and "timed out after 30 seconds" in normalized_error)
     ):
+        failure_reason = "version-resolution-timeout"
+        code = "ORACLE_VERSION_RESOLUTION_PRELAUNCH_FAILED"
+    else:
         return None
     return {
         "schema": "codex.chatgpt.oracle-pre-submit-host-failure/v1",
-        "code": "ORACLE_VERSION_RESOLUTION_PRELAUNCH_FAILED",
+        "code": code,
         "stdout_sha256": hashlib.sha256(stdout_bytes).hexdigest(),
         "stderr_sha256": hashlib.sha256(stderr_bytes).hexdigest(),
         "output_absent": True,
         "conversation_url_absent": True,
         "resolved_version": "unresolved",
+        "failure_reason": failure_reason,
+    }
+
+
+def proven_pre_submit_copy_profile_manual_login_conflict(state_path: Path) -> dict[str, Any] | None:
+    """Prove Oracle rejected mutually exclusive profile modes before browser launch."""
+    state = load_state(state_path)
+    if str(state.get("session_authority") or "") not in {"pre_submit", "submitted_unknown"}:
+        return None
+    if state.get("terminal_harvested") is True or _state_has_conversation_url(state):
+        return None
+    profile = state.get("profile") if isinstance(state.get("profile"), dict) else {}
+    copy_profile = str(profile.get("copy_profile") or "").strip()
+    oracle = state.get("oracle") if isinstance(state.get("oracle"), dict) else {}
+    artifacts = state.get("artifacts") if isinstance(state.get("artifacts"), dict) else {}
+    output = Path(str(artifacts.get("output") or ""))
+    stdout_record = _artifact_bytes(state, "stdout")
+    stderr_record = _artifact_bytes(state, "stderr")
+    if (
+        not copy_profile
+        or str(oracle.get("resolved_version") or "").removeprefix("oracle ").strip() != "0.17.1"
+        or output_is_nonempty(output)
+        or stdout_record is None
+        or stderr_record is None
+    ):
+        return None
+    _, stdout_bytes = stdout_record
+    _, stderr_bytes = stderr_record
+    combined = (stdout_bytes + b"\n" + stderr_bytes).decode("utf-8", errors="replace")
+    if CHATGPT_CONVERSATION_URL_RE.search(combined):
+        return None
+    if ORACLE_COPY_PROFILE_MANUAL_LOGIN_CONFLICT not in combined:
+        return None
+    return {
+        "schema": "codex.chatgpt.oracle-pre-submit-host-failure/v1",
+        "code": "ORACLE_LAUNCH_FLAGS_MUTUALLY_EXCLUSIVE_PRELAUNCH_FAILED",
+        "stdout_sha256": hashlib.sha256(stdout_bytes).hexdigest(),
+        "stderr_sha256": hashlib.sha256(stderr_bytes).hexdigest(),
+        "output_absent": True,
+        "conversation_url_absent": True,
+        "failure_reason": "copy-profile-manual-login-default-conflict",
+        "copy_profile": str(Path(copy_profile).resolve()),
+    }
+
+
+def proven_pre_submit_profile_copy_rsync_missing(state_path: Path) -> dict[str, Any] | None:
+    """Prove Windows profile copy failed before Chrome because Oracle invoked rsync."""
+    state = load_state(state_path)
+    if str(state.get("session_authority") or "") not in {"pre_submit", "submitted_unknown"}:
+        return None
+    if state.get("terminal_harvested") is True or _state_has_conversation_url(state):
+        return None
+    profile = state.get("profile") if isinstance(state.get("profile"), dict) else {}
+    copy_profile = str(profile.get("copy_profile") or "").strip()
+    oracle = state.get("oracle") if isinstance(state.get("oracle"), dict) else {}
+    artifacts = state.get("artifacts") if isinstance(state.get("artifacts"), dict) else {}
+    output = Path(str(artifacts.get("output") or ""))
+    stdout_record = _artifact_bytes(state, "stdout")
+    stderr_record = _artifact_bytes(state, "stderr")
+    if (
+        not copy_profile
+        or str(oracle.get("resolved_version") or "").removeprefix("oracle ").strip() != "0.17.1"
+        or output_is_nonempty(output)
+        or stdout_record is None
+        or stderr_record is None
+    ):
+        return None
+    _, stdout_bytes = stdout_record
+    _, stderr_bytes = stderr_record
+    combined = (stdout_bytes + b"\n" + stderr_bytes).decode("utf-8", errors="replace")
+    if CHATGPT_CONVERSATION_URL_RE.search(combined):
+        return None
+    if ORACLE_PROFILE_COPY_RSYNC_MISSING not in combined:
+        return None
+    return {
+        "schema": "codex.chatgpt.oracle-pre-submit-host-failure/v1",
+        "code": "ORACLE_PROFILE_COPY_RSYNC_PRELAUNCH_FAILED",
+        "stdout_sha256": hashlib.sha256(stdout_bytes).hexdigest(),
+        "stderr_sha256": hashlib.sha256(stderr_bytes).hexdigest(),
+        "output_absent": True,
+        "conversation_url_absent": True,
+        "failure_reason": "oracle-profile-copy-requires-rsync-on-windows",
+        "copy_profile": str(Path(copy_profile).resolve()),
+    }
+
+
+def proven_pre_submit_profile_copy_ebusy(state_path: Path) -> dict[str, Any] | None:
+    """Prove Oracle failed while copying its profile, before it could open ChatGPT."""
+    state = load_state(state_path)
+    if str(state.get("session_authority") or "") not in {"pre_submit", "submitted_unknown"}:
+        return None
+    if state.get("terminal_harvested") is True or _state_has_conversation_url(state):
+        return None
+    profile = state.get("profile") if isinstance(state.get("profile"), dict) else {}
+    copy_profile = Path(str(profile.get("copy_profile") or ""))
+    artifacts = state.get("artifacts") if isinstance(state.get("artifacts"), dict) else {}
+    browser_temp = Path(str(artifacts.get("browser_temp") or ""))
+    output = Path(str(artifacts.get("output") or ""))
+    stdout_record = _artifact_bytes(state, "stdout")
+    stderr_record = _artifact_bytes(state, "stderr")
+    if (
+        not str(copy_profile)
+        or not str(browser_temp)
+        or output_is_nonempty(output)
+        or stdout_record is None
+        or stderr_record is None
+    ):
+        return None
+    _, stdout_bytes = stdout_record
+    _, stderr_bytes = stderr_record
+    text = (stdout_bytes + b"\n" + stderr_bytes).decode("utf-8", errors="replace")
+    if "https://chatgpt.com/c/" in text.casefold():
+        return None
+    match = ORACLE_PROFILE_COPY_EBUSY_RE.search(text)
+    if match is None:
+        return None
+    source = Path(match.group("source"))
+    destination = Path(match.group("destination"))
+    expected_source = copy_profile / "Default" / "Network" / "Cookies"
+    if (
+        source.resolve() != expected_source.resolve()
+        or not is_within(browser_temp.resolve(), destination.resolve())
+        or destination.name.casefold() != "cookies"
+    ):
+        return None
+    return {
+        "schema": "codex.chatgpt.oracle-pre-submit-host-failure/v1",
+        "code": "ORACLE_PROFILE_COPY_EBUSY_PRELAUNCH_FAILED",
+        "stdout_sha256": hashlib.sha256(stdout_bytes).hexdigest(),
+        "stderr_sha256": hashlib.sha256(stderr_bytes).hexdigest(),
+        "output_absent": True,
+        "conversation_url_absent": True,
+        "failure_reason": "oracle-profile-copy-ebusy",
+        "copy_source": str(source.resolve()),
+        "copy_destination": str(destination.resolve()),
+    }
+
+
+def proven_pre_submit_thinking_time_failure(state_path: Path) -> dict[str, Any] | None:
+    """Prove the strict effort selector failed before Oracle could send a prompt."""
+    state = load_state(state_path)
+    if str(state.get("session_authority") or "") not in {"pre_submit", "submitted_unknown"}:
+        return None
+    if state.get("terminal_harvested") is True or _state_has_conversation_url(state):
+        return None
+    artifacts = state.get("artifacts") if isinstance(state.get("artifacts"), dict) else {}
+    output = Path(str(artifacts.get("output") or ""))
+    stdout_record = _artifact_bytes(state, "stdout")
+    stderr_record = _artifact_bytes(state, "stderr")
+    if output_is_nonempty(output) or stdout_record is None or stderr_record is None:
+        return None
+    _, stdout_bytes = stdout_record
+    _, stderr_bytes = stderr_record
+    combined = (stdout_bytes + b"\n" + stderr_bytes).decode("utf-8", errors="replace")
+    if CHATGPT_CONVERSATION_URL_RE.search(combined):
+        return None
+    match = ORACLE_THINKING_TIME_PRE_SUBMIT_RE.search(combined)
+    if match is None or match.group("requested").casefold() != match.group("required").casefold():
+        return None
+    oracle = state.get("oracle") if isinstance(state.get("oracle"), dict) else {}
+    locator = str(oracle.get("session_locator") or oracle.get("slug") or "").strip()
+    if not locator:
+        return None
+    return {
+        "schema": "codex.chatgpt.oracle-pre-submit-ui-failure/v1",
+        "code": "ORACLE_THINKING_TIME_PRE_SUBMIT_FAILED",
+        "oracle_locator": locator,
+        "requested_level": match.group("requested"),
+        "stdout_sha256": hashlib.sha256(stdout_bytes).hexdigest(),
+        "stderr_sha256": hashlib.sha256(stderr_bytes).hexdigest(),
+        "output_absent": True,
+        "conversation_url_absent": True,
+        "failure_reason": "oracle-thinking-time-selection-unverified",
+    }
+
+
+def proven_pre_submit_model_switcher_failure(state_path: Path) -> dict[str, Any] | None:
+    """Prove Oracle failed selecting a model before it could send a prompt.
+
+    This intentionally accepts only Oracle's exact model-switcher/no-cookie
+    diagnostic, with both output and conversation evidence absent.  A generic
+    browser error, a recorded conversation URL, or any durable output remains
+    submitted-unknown and therefore keeps the project lock fail-closed.
+    """
+    state = load_state(state_path)
+    if str(state.get("session_authority") or "") not in {"pre_submit", "submitted_unknown"}:
+        return None
+    if state.get("terminal_harvested") is True or _state_has_conversation_url(state):
+        return None
+    artifacts = state.get("artifacts") if isinstance(state.get("artifacts"), dict) else {}
+    output = Path(str(artifacts.get("output") or ""))
+    stdout_record = _artifact_bytes(state, "stdout")
+    stderr_record = _artifact_bytes(state, "stderr")
+    if output_is_nonempty(output) or stdout_record is None or stderr_record is None:
+        return None
+    _, stdout_bytes = stdout_record
+    _, stderr_bytes = stderr_record
+    combined = (stdout_bytes + b"\n" + stderr_bytes).decode("utf-8", errors="replace")
+    if CHATGPT_CONVERSATION_URL_RE.search(combined):
+        return None
+    if ORACLE_MODEL_SWITCHER_PRE_SUBMIT_RE.search(combined) is None:
+        return None
+    oracle = state.get("oracle") if isinstance(state.get("oracle"), dict) else {}
+    locator = str(oracle.get("session_locator") or oracle.get("slug") or "").strip()
+    if not locator:
+        return None
+    return {
+        "schema": "codex.chatgpt.oracle-pre-submit-ui-failure/v1",
+        "code": "ORACLE_MODEL_SWITCHER_PRE_SUBMIT_FAILED",
+        "oracle_locator": locator,
+        "stdout_sha256": hashlib.sha256(stdout_bytes).hexdigest(),
+        "stderr_sha256": hashlib.sha256(stderr_bytes).hexdigest(),
+        "output_absent": True,
+        "conversation_url_absent": True,
+        "failure_reason": "oracle-model-switcher-no-cookies",
     }
 
 
@@ -1168,6 +2319,12 @@ def proven_pre_submit_failure(state_path: Path) -> dict[str, Any] | None:
     return (
         proven_pre_submit_rejection(state_path)
         or proven_pre_submit_attachment_size_failure(state_path)
+        or proven_pre_submit_copy_profile_manual_login_conflict(state_path)
+        or proven_pre_submit_profile_copy_rsync_missing(state_path)
+        or proven_pre_submit_profile_copy_ebusy(state_path)
+        or proven_pre_submit_thinking_time_failure(state_path)
+        or proven_pre_submit_model_switcher_failure(state_path)
+        or proven_pre_submit_cdp_disconnect(state_path)
         or proven_pre_submit_host_failure(state_path)
         or proven_user_confirmed_no_submission(state_path)
     )
@@ -1202,15 +2359,23 @@ def settle_proven_pre_submit_failure(state_path: Path) -> dict[str, Any] | None:
     confirmed = proven_user_confirmed_no_submission(state_path)
     if confirmed is not None:
         return load_state(state_path)
-    evidence = (
-        proven_pre_submit_attachment_size_failure(state_path)
-        or proven_pre_submit_host_failure(state_path)
-    )
+    evidence = proven_pre_submit_attachment_size_failure(state_path)
+    if evidence is None:
+        evidence = proven_pre_submit_copy_profile_manual_login_conflict(state_path)
+    if evidence is None:
+        evidence = proven_pre_submit_profile_copy_rsync_missing(state_path)
+    if evidence is None:
+        evidence = proven_pre_submit_host_failure(state_path)
+    if evidence is None:
+        evidence = proven_pre_submit_profile_copy_ebusy(state_path)
+    if evidence is None:
+        evidence = proven_pre_submit_thinking_time_failure(state_path)
+    if evidence is None:
+        evidence = proven_pre_submit_model_switcher_failure(state_path)
+    if evidence is None:
+        evidence = proven_pre_submit_cdp_disconnect(state_path)
     if evidence is None:
         return None
-    attachment_size_rejection = (
-        evidence.get("code") == "ORACLE_ATTACHMENT_SIZE_PREFLIGHT_REJECTED"
-    )
     payload = load_state(state_path)
     payload.update({
         "status": "attention_required",
@@ -1219,12 +2384,39 @@ def settle_proven_pre_submit_failure(state_path: Path) -> dict[str, Any] | None:
         "terminal_harvested": False,
         "artifact_sha256": None,
         "transport_status": (
-            "rejected_pre_submit" if attachment_size_rejection else "failed_pre_submit"
+            "rejected_pre_submit"
+            if evidence["code"] == "ORACLE_ATTACHMENT_SIZE_PREFLIGHT_REJECTED"
+            else "failed_pre_submit"
         ),
-        "task_outcome": "pending",
+        "task_outcome": (
+            "not_executed"
+            if evidence["code"] in {
+                "ORACLE_PROFILE_COPY_EBUSY_PRELAUNCH_FAILED",
+                "ORACLE_PROFILE_COPY_RSYNC_PRELAUNCH_FAILED",
+                "ORACLE_THINKING_TIME_PRE_SUBMIT_FAILED",
+                "ORACLE_LAUNCH_FLAGS_MUTUALLY_EXCLUSIVE_PRELAUNCH_FAILED",
+                "ORACLE_MANUAL_LOGIN_PROFILE_UNINITIALIZED_PRELAUNCH_FAILED",
+                "ORACLE_CDP_DISCONNECT_PRE_SUBMIT_FAILED",
+            }
+            else "pending"
+        ),
         "task_outcome_reason": (
             "oracle-attachment-size-preflight-rejected"
-            if attachment_size_rejection
+            if evidence["code"] == "ORACLE_ATTACHMENT_SIZE_PREFLIGHT_REJECTED"
+            else "oracle-profile-copy-ebusy-pre-submit"
+            if evidence["code"] == "ORACLE_PROFILE_COPY_EBUSY_PRELAUNCH_FAILED"
+            else "oracle-profile-copy-rsync-pre-submit"
+            if evidence["code"] == "ORACLE_PROFILE_COPY_RSYNC_PRELAUNCH_FAILED"
+            else "oracle-thinking-time-pre-submit"
+            if evidence["code"] == "ORACLE_THINKING_TIME_PRE_SUBMIT_FAILED"
+            else "oracle-launch-flags-mutually-exclusive-pre-submit"
+            if evidence["code"] == "ORACLE_LAUNCH_FLAGS_MUTUALLY_EXCLUSIVE_PRELAUNCH_FAILED"
+            else "oracle-manual-login-profile-uninitialized-pre-submit"
+            if evidence["code"] == "ORACLE_MANUAL_LOGIN_PROFILE_UNINITIALIZED_PRELAUNCH_FAILED"
+            else "oracle-cdp-disconnect-pre-submit"
+            if evidence["code"] == "ORACLE_CDP_DISCONNECT_PRE_SUBMIT_FAILED"
+            else "oracle-model-switcher-pre-submit"
+            if evidence["code"] == "ORACLE_MODEL_SWITCHER_PRE_SUBMIT_FAILED"
             else "prelaunch-host-failure"
         ),
         "pre_submit_failure": evidence,
@@ -1308,6 +2500,8 @@ def resolve_lifecycle(state: dict[str, Any], *, output_is_present: bool | None =
     if status == "abandoned":
         return {"lifecycle": "abandoned", "authority_source": "explicit-abandonment"}
     # 1. Exact terminal web evidence.
+    if authority == "settled_executed" and outcome == "executed":
+        return {"lifecycle": "complete", "authority_source": "user-confirmed-execution-settlement"}
     if authority == "terminal" and harvested and has_output:
         if outcome == "not_executed":
             return {"lifecycle": "needs_attention", "authority_source": "exact-terminal-evidence"}
@@ -1338,18 +2532,44 @@ TASK_OUTCOME_RE = re.compile(
     re.IGNORECASE,
 )
 
+MARKDOWN_HTTP_REFERENCE_DEFINITION_RE = re.compile(
+    r"\[[^\]\r\n]+\]:[ \t]+(?:<https?://[^>\s]+>|https?://\S+)"
+    r"(?:[ \t]+(?:\"[^\"\r\n]*\"|'[^'\r\n]*'|\([^\)\r\n]*\)))?[ \t]*",
+    re.IGNORECASE,
+)
+
+
+def _only_bounded_reference_definitions(lines: list[str]) -> bool:
+    return all(
+        not line.strip()
+        or MARKDOWN_HTTP_REFERENCE_DEFINITION_RE.fullmatch(line.strip()) is not None
+        for line in lines
+    )
+
 
 def classify_task_outcome(path: Path, *, contract: str, transport: str) -> str:
-    if transport == "pro-attachment-only":
+    if is_attachment_transport(transport):
         return "not_applicable"
     try:
         text = path.read_text(encoding="utf-8", errors="strict")
     except (OSError, UnicodeDecodeError):
         return "unknown"
-    final_line = next((line.strip() for line in reversed(text.splitlines()) if line.strip()), "")
-    marker = TASK_OUTCOME_RE.fullmatch(final_line)
-    if marker:
-        return marker.group(1).casefold()
+    # The v1 marker is normally the final nonempty line. Some provider renderers
+    # move Markdown link definitions below it. Accept only that bounded,
+    # non-semantic appendix: one marker in the entire artifact followed solely
+    # by single-line HTTP(S) reference definitions and blank lines.
+    if len(TASK_OUTCOME_RE.findall(text)) != 1:
+        return "unknown" if contract == "v1" else "legacy_unclassified"
+    lines = text.splitlines()
+    marker_lines = [
+        (index, marker)
+        for index, line in enumerate(lines)
+        if (marker := TASK_OUTCOME_RE.fullmatch(line.strip())) is not None
+    ]
+    if len(marker_lines) == 1:
+        index, marker = marker_lines[0]
+        if _only_bounded_reference_definitions(lines[index + 1 :]):
+            return marker.group(1).casefold()
     return "unknown" if contract == "v1" else "legacy_unclassified"
 
 
@@ -1384,12 +2604,19 @@ def unresolved_project_sessions(
             continue
         authority = str(payload.get("session_authority") or "").strip().casefold()
         settlement_artifact = candidate.parent / "user-confirmed-no-submission.json"
+        execution_settlement_artifact = candidate.parent / "user-confirmed-execution-ended.json"
         settlement_derived = (
             "user_confirmed_no_submission" in payload
             or str(payload.get("transport_status") or "") == "not_submitted_user_confirmed"
             or str(payload.get("task_outcome_reason") or "")
             == "user-confirmed-no-submission-after-prompt-timeout"
             or settlement_artifact.exists()
+        )
+        execution_settlement_derived = (
+            "user_confirmed_execution_ended" in payload
+            or str(payload.get("transport_status") or "")
+            == "post_submit_provider_delivery_timeout_settled"
+            or execution_settlement_artifact.exists()
         )
         invalid_settlement = False
         if (
@@ -1400,6 +2627,13 @@ def unresolved_project_sessions(
             # A missing or changed settlement artifact revokes the release and
             # restores fail-closed ownership before any new submission.
             authority = "submitted_unknown"
+            invalid_settlement = True
+        if (
+            authority == "settled_executed"
+            and execution_settlement_derived
+            and proven_user_confirmed_execution_ended(candidate) is None
+        ):
+            authority = "live"
             invalid_settlement = True
         # Legacy running records fail closed because the provider may still be
         # active. Legacy attention-required records predate explicit session

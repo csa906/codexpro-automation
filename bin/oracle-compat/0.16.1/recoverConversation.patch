@@ -12,7 +12,8 @@ diff --git a/dist/src/browser/recoverConversation.js b/dist/src/browser/recoverC
  import { isRecoverableChatGptConversationUrl } from "./reattachability.js";
  import { harvestChatGptTab, openChatGptTarget } from "./liveTabs.js";
 +import { copyChromeProfile } from "./profileCopy.js";
- const DEFAULT_READY_TIMEOUT_MS = 30_000;
+-const DEFAULT_READY_TIMEOUT_MS = 30_000;
++const DEFAULT_READY_TIMEOUT_MS = 90_000;
  const READY_POLL_MS = 1_000;
  /**
 @@ -29,6 +34,10 @@ export function resolveRecoveryUrl(meta) {
@@ -55,7 +56,7 @@ diff --git a/dist/src/browser/recoverConversation.js b/dist/src/browser/recoverC
  async function waitForRecoveredConversationReady(endpoint, ref, timeoutMs) {
      const deadline = Date.now() + timeoutMs;
      let lastError = null;
-@@ -108,10 +139,33 @@ export async function recoverConversationTab(meta, logger, options = {}) {
+@@ -108,10 +135,33 @@ export async function recoverConversationTab(meta, logger, options = {}) {
              logger(`[browser] Recovery: existing Chrome could not reopen the conversation (${message}).`);
          }
      }

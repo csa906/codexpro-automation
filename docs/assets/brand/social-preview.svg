@@ -1,0 +1,30 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 640" role="img" aria-labelledby="title desc">
+  <title id="title">Codex Web GPT Automation social preview</title>
+  <desc id="desc">GitHub social preview for guarded and recoverable web ChatGPT automation.</desc>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop stop-color="#070B17"/>
+      <stop offset="1" stop-color="#14203F"/>
+    </linearGradient>
+    <pattern id="grid" width="40" height="40" patternUnits="userSpaceOnUse">
+      <path d="M40 0H0v40" fill="none" stroke="#94A3B8" stroke-opacity=".075"/>
+    </pattern>
+  </defs>
+  <rect width="1280" height="640" fill="url(#bg)"/>
+  <rect width="1280" height="640" fill="url(#grid)"/>
+  <circle cx="1170" cy="70" r="300" fill="#2DD4BF" opacity=".07"/>
+  <circle cx="1080" cy="610" r="350" fill="#8B5CF6" opacity=".09"/>
+  <g transform="translate(86 120) scale(.78125)">
+    <path fill="#F8FAFC" d="M200 72 80 192v128l120 120 48-48-96-96v-80l96-96-48-48Z"/>
+    <path fill="#2DD4BF" d="m312 72 120 120v128L312 440l-48-48 96-96v-80l-96-96 48-48Z"/>
+    <path fill="none" stroke="#2DD4BF" stroke-linecap="round" stroke-width="18" d="M182 256h42"/>
+    <path fill="none" stroke="#8B5CF6" stroke-linecap="round" stroke-width="18" d="M288 256h42"/>
+    <circle cx="168" cy="256" r="24" fill="#2DD4BF"/>
+    <circle cx="344" cy="256" r="24" fill="#8B5CF6"/>
+    <path fill="#8B5CF6" d="M256 206c8 28 22 42 50 50-28 8-42 22-50 50-8-28-22-42-50-50 28-8 42-22 50-50Z"/>
+  </g>
+  <text x="500" y="250" fill="#F8FAFC" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif" font-size="68" font-weight="760" letter-spacing="-2">Codex Web GPT</text>
+  <text x="504" y="322" fill="#CBD5E1" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif" font-size="41" font-weight="570" letter-spacing="7">AUTOMATION</text>
+  <text x="504" y="391" fill="#94A3B8" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif" font-size="25">Guarded. Recoverable. Web-first.</text>
+  <text x="504" y="438" fill="#64748B" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif" font-size="20">Oracle · DevSpace · Web Multi-GPT · Windows · macOS</text>
+</svg>

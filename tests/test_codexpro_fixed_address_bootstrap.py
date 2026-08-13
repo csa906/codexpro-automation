@@ -6,6 +6,8 @@ import shutil
 import subprocess
 from pathlib import Path
 
+import pytest
+
 
 CODEX_HOME = Path(__file__).resolve().parents[1]
 BOOTSTRAP = CODEX_HOME / "bin" / "codexpro_project_cloudflare_bootstrap.ps1"
@@ -17,6 +19,8 @@ def _source() -> str:
 
 
 def _dry_run_process(tmp_path: Path, decision: dict, *args: str) -> subprocess.CompletedProcess[str]:
+    if shutil.which("powershell.exe") is None:
+        pytest.skip("Windows exact-unit bootstrap requires PowerShell")
     user_profile = tmp_path / "profile"
     bin_dir = user_profile / ".codex" / "bin"
     bin_dir.mkdir(parents=True)
@@ -89,6 +93,8 @@ def _dry_run(tmp_path: Path, decision: dict, *args: str) -> dict:
 
 
 def test_bootstrap_is_valid_powershell() -> None:
+    if shutil.which("powershell.exe") is None:
+        pytest.skip("Windows exact-unit bootstrap requires PowerShell")
     command = (
         "$tokens=$null; $errors=$null; "
         f"[System.Management.Automation.Language.Parser]::ParseFile('{BOOTSTRAP}',"

@@ -5,6 +5,7 @@ import importlib.util
 import json
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -23,6 +24,31 @@ def load_compat():
 
 def digest(value: bytes) -> str:
     return hashlib.sha256(value).hexdigest()
+
+
+def test_native_runtime_probe_loads_exact_binding_and_fails_actionably(tmp_path: Path) -> None:
+    compat = load_compat()
+    package = tmp_path / "devspace"
+    package.mkdir()
+    (package / "package.json").write_text(json.dumps({"version": "1.0.4"}), encoding="utf-8")
+    calls: list[tuple[list[str], dict]] = []
+
+    def passing(argv, **kwargs):
+        calls.append((list(argv), dict(kwargs)))
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    report = compat.check_native_runtime(package_root=package, runner=passing)
+    assert report["status"] == "loadable"
+    assert "better-sqlite3" in calls[0][0][2]
+    assert calls[0][1]["cwd"] == str(package.resolve())
+
+    def failing(argv, **kwargs):
+        return SimpleNamespace(returncode=1, stdout="", stderr="Could not locate the bindings file")
+
+    with pytest.raises(compat.DevSpaceCompatError) as failure:
+        compat.check_native_runtime(package_root=package, runner=failing)
+    assert failure.value.code == "DEVSPACE_NATIVE_BINDING_UNAVAILABLE"
+    assert "install-scripts" in failure.value.evidence["next_action"]
 
 
 def test_exact_devspace_patch_is_hash_gated_idempotent_and_backed_up(
@@ -132,7 +158,7 @@ def test_restart_confirmation_rejects_old_or_foreign_listener(
 def test_stop_service_requires_exact_devspace_identity() -> None:
     compat = load_compat()
     stopped: list[int] = []
-    package = Path("C:/tested/devspace")
+    package = Path("C:/tested/node_modules/@waishnav/devspace")
     result = compat.stop_exact_devspace_service(
         service_probe=lambda port: {
             "pid": 44,
@@ -145,6 +171,20 @@ def test_stop_service_requires_exact_devspace_identity() -> None:
     assert result["stopped"] is True
     assert stopped == [44]
 
+    npx_result = compat.stop_exact_devspace_service(
+        service_probe=lambda port: {
+            "pid": 45,
+            "command_line": (
+                r'"node" "C:\tested\node_modules\.bin\\..\@waishnav\devspace\dist\cli.js" serve'
+            ),
+            "started_at_unix_ns": 1,
+        },
+        stopper=stopped.append,
+        package_roots=[package],
+    )
+    assert npx_result["stopped"] is True
+    assert stopped == [44, 45]
+
     with pytest.raises(compat.DevSpaceCompatError) as foreign:
         compat.stop_exact_devspace_service(
             service_probe=lambda port: {
@@ -156,6 +196,53 @@ def test_stop_service_requires_exact_devspace_identity() -> None:
             package_roots=[package],
         )
     assert foreign.value.code == "DEVSPACE_SERVICE_IDENTITY_MISMATCH"
+
+
+def test_service_identity_accepts_posix_npm_shim_only_for_exact_package(
+    tmp_path: Path,
+) -> None:
+    if sys.platform == "win32":
+        pytest.skip("POSIX npm launchers use symlinks")
+    compat = load_compat()
+    package = tmp_path / "node_modules" / "@waishnav" / "devspace"
+    cli = package / "dist" / "cli.js"
+    cli.parent.mkdir(parents=True)
+    cli.write_text("#!/usr/bin/env node\n", encoding="utf-8")
+    shim = tmp_path / "node_modules" / ".bin" / "devspace"
+    shim.parent.mkdir()
+    shim.symlink_to(cli)
+
+    identity = compat._assert_devspace_service_identity(
+        {"pid": 77, "command_line": f"node {shim} serve"},
+        [package],
+    )
+
+    assert identity["pid"] == 77
+
+
+def test_service_identity_rejects_posix_npm_shim_for_foreign_package(
+    tmp_path: Path,
+) -> None:
+    if sys.platform == "win32":
+        pytest.skip("POSIX npm launchers use symlinks")
+    compat = load_compat()
+    package = tmp_path / "node_modules" / "@waishnav" / "devspace"
+    cli = package / "dist" / "cli.js"
+    cli.parent.mkdir(parents=True)
+    cli.write_text("#!/usr/bin/env node\n", encoding="utf-8")
+    foreign_cli = tmp_path / "foreign-cli.js"
+    foreign_cli.write_text("#!/usr/bin/env node\n", encoding="utf-8")
+    shim = tmp_path / "node_modules" / ".bin" / "devspace"
+    shim.parent.mkdir()
+    shim.symlink_to(foreign_cli)
+
+    with pytest.raises(compat.DevSpaceCompatError) as mismatch:
+        compat._assert_devspace_service_identity(
+            {"pid": 88, "command_line": f"node {shim} serve"},
+            [package],
+        )
+
+    assert mismatch.value.code == "DEVSPACE_SERVICE_IDENTITY_MISMATCH"
 
 
 def test_unknown_devspace_version_or_file_hash_fails_closed(tmp_path: Path) -> None:
@@ -195,3 +282,42 @@ def test_bounded_workspace_patch_skips_transient_trees_and_batches_discovery() -
     assert '".venv"' in patch
     assert "const batchSize = 24" in patch
     assert "await Promise.all(batch.map" in patch
+
+
+def test_directory_read_patch_routes_directories_without_widening_read_access() -> None:
+    compat = load_compat()
+    patch = (
+        MODULE_PATH.parent
+        / "devspace-compat"
+        / compat.SUPPORTED_VERSION
+        / "directory-read.patch"
+    ).read_text(encoding="utf-8")
+
+    assert compat.PATCHES["dist/server.js"] == {
+        "patch": "directory-read.patch",
+        "pristine": "c49c1c607b42e040cdf0b15d5a4a93cfef9ddb8147d492a3cfa2a8c3889dab24",
+        "patched": "d5d9b08c482b282f3390f415d69d460f4ee844046962a4013f11612cbb6b52e0",
+    }
+    assert "const readPath = workspaces.resolveReadPath(workspace, input.path);" in patch
+    assert "isDirectory = (await stat(readPath.absolutePath)).isDirectory();" in patch
+    assert "? await listDirectoryTool({ path: readPath.absolutePath }, {" in patch
+    assert "+                root: workspace.root," in patch
+    assert ": await readFileTool({ ...input, path: readPath.absolutePath }, {" in patch
+    assert "+                readRoots: readPath.readRoots," in patch
+
+
+def test_directory_read_patch_unknown_upstream_hash_fails_closed(tmp_path: Path) -> None:
+    compat = load_compat()
+    package = tmp_path / "package"
+    package.mkdir()
+    (package / "package.json").write_text(json.dumps({"version": "1.0.4"}), encoding="utf-8")
+    server = package / "dist" / "server.js"
+    server.parent.mkdir()
+    server.write_text("unknown upstream bytes\\n", encoding="utf-8")
+    compat.PATCHES = {"dist/server.js": compat.PATCHES["dist/server.js"]}
+
+    with pytest.raises(compat.DevSpaceCompatError) as mismatch:
+        compat.ensure_devspace_compatibility(package_root=package)
+
+    assert mismatch.value.code == "DEVSPACE_FILE_HASH_MISMATCH"
+    assert mismatch.value.evidence["path"] == str(server)

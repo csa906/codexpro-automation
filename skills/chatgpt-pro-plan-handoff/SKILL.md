@@ -1,12 +1,16 @@
 ---
 name: chatgpt-pro-plan-handoff
-description: Run staged work with unchanged attachment-only Pro and Oracle-based regular comprehensive stages; optional Web Multi uses independent Oracle sessions.
+description: Run staged work with read-only DevSpace Pro by default and Oracle-based regular comprehensive stages; explicit Pro attachments remain available for bounded evidence.
 ---
 
 # Pro and comprehensive handoff
 
-Pro is attachment-only through `chatgpt-pro-browser` and Oracle. It never uses
-DevSpace or CodexPro. CodexPro and all agbrowse creation are frozen; legacy
+Pro uses Oracle. The default comprehensive Pro stage is qualified `GPT-5.6 Sol`
+at the Pro effort with read-only DevSpace; it binds the exact project root,
+begins adaptive discovery with `read('.')`, and cannot write, edit, invoke a
+shell, or run commands. `pro-attachment` remains an explicit attachment-only
+contract for immutable/external evidence or DevSpace-unreadable artifacts, not
+an automatic fallback. CodexPro and all agbrowse creation are frozen; legacy
 files remain only for exact persisted-run recovery.
 
 New GPT comprehensive work uses
@@ -17,6 +21,15 @@ New GPT comprehensive work uses
 plan -> optional Pro or Oracle Web Multi -> review
      -> implementation -> final web gate -> one local deterministic gate
 ```
+
+The optional `ultra-economy` profile instead starts with qualified read-only
+Pro design, then uses separate regular web review, implementation, and final
+gate sessions. On the first activation request in a Codex task, the local
+commander gives one unconditional instruction to select `gpt-5.6-luna` with
+`max` reasoning and waits for confirmation. It does not inspect the runtime or
+repeat that question later in the same task. Follow
+`skills/ultra-economy-mode/SKILL.md` for the local commander and Luna Max
+subagent contract.
 
 Comprehensive mode is a staged workflow, not a prompt variant. Its
 implementation stage carries the same orchestrator ownership contract used by
@@ -41,20 +54,18 @@ bound `codex.chatgpt.oracle-stage-result/v1` receipt. The host validates
 workflow/stage/attempt/input hashes, UTF-8 paths, output hashes, PASS status,
 and the transition; it never rewrites the semantic prompt.
 
-An optional Pro stage runs through Oracle attachment-only. Because Pro has no
-DevSpace access, it returns one strict identity-bound JSON envelope containing
-its output and next-mission text. The host mechanically preserves those strings
-as UTF-8 files and computes the standard receipt; it does not summarize or
-rewrite them.
+An optional Pro stage runs through Oracle with read-only DevSpace by default.
+It returns one strict identity-bound JSON envelope containing its output and
+next-mission text. The host mechanically preserves those strings as UTF-8 files
+and computes the standard receipt; it does not summarize or rewrite them.
 
-When a plan routes to Pro and Pro needs an evidence packet, the plan-authored
-next mission declares it in exactly one closed `[PRO_ATTACHMENT_CONTRACT]`
-block. The JSON body uses schema `codex.chatgpt.oracle-pro-attachments/v1` and
-an `attachments` array of absolute project-root-contained regular non-symlink
-paths with optional SHA-256 values. The host attaches only the mission and these
-declared files; it never discovers ZIPs from prose. A legacy Pro mission without
-the block remains mission-only. Regular DevSpace stages reject this block and
-never receive packet attachments.
+When a plan explicitly selects `pro-attachment`, its next mission declares one
+closed `[PRO_ATTACHMENT_CONTRACT]` block. The JSON body uses schema
+`codex.chatgpt.oracle-pro-attachments/v1` and an `attachments` array of
+absolute project-root-contained regular non-symlink paths with optional
+SHA-256 values. The host attaches only the mission and these declared files; it
+never discovers ZIPs from prose. A Pro mission without the block uses the
+read-only DevSpace default. Regular non-Pro DevSpace stages reject this block.
 
 Plan receipts should use `PLAN_READY`. For compatibility, `completed` is
 accepted only when the plan receipt is otherwise a fully ready, blocker-free,
@@ -95,8 +106,9 @@ Transport or runner recovery keeps the same workflow and stage identity. It
 must never create a `workflow-retryN` replacement. The revision budget and
 remaining critical finding set are persisted in the workflow state for
 operator visibility. Only final web PASS plus a zero-exit local gate can
-complete. A Pro selection launches an explicit Oracle attachment-only stage
-and waits for a bound receipt; it is never downgraded. Missing receipt/output,
+complete. A Pro selection launches the qualified read-only DevSpace stage unless
+its plan explicitly declares `pro-attachment`, then waits for a bound receipt;
+it is never downgraded. Missing receipt/output,
 crash, or ambiguity returns attention-required without a replacement submit.
 Regular-stage `--browser-timeout` is an overall answer deadline, not a fresh
 budget for each reload/fallback. If Oracle fails to exit within that deadline

@@ -66,6 +66,8 @@ SIGNATURE_RULES: tuple[tuple[str, str, str], ...] = (
     ("app mention suggestion did not appear", PRE_SUBMIT_UI, "app-mention-suggestion-absent"),
     ("app mention was not confirmed", PRE_SUBMIT_UI, "app-mention-not-confirmed"),
     ("Unable to find model option", PRE_SUBMIT_UI, "model-option-label-missing"),
+    ("Thinking time: selection unverified", PRE_SUBMIT_UI, "thinking-time-selection-unverified"),
+    ("Thinking time: unknown outcome selecting", PRE_SUBMIT_UI, "thinking-time-selection-unverified"),
     ("Chrome window closed", BROWSER_LIFETIME, "browser-window-closed-early"),
     ("disconnected before completion", BROWSER_LIFETIME, "browser-disconnected-early"),
     ("ECONNREFUSED", RECOVERY_BINDING, "recovery-cdp-connection-refused"),
@@ -128,7 +130,7 @@ def classify_run(
     has_output: bool,
     transcript_text: str = "",
     user_confirmed_no_submission: bool = False,
-    proven_pre_submit_failure: dict[str, Any] | None = None,
+    pre_submit_host_failure: dict[str, Any] | None = None,
 ) -> dict[str, str]:
     """Return the bucket and signature for one persisted run.
 
@@ -143,13 +145,32 @@ def classify_run(
     lifecycle = str(verdict["lifecycle"])
     source = str(verdict["authority_source"])
 
-    if proven_pre_submit_failure is not None:
-        code = str(proven_pre_submit_failure.get("code") or "")
-        classified = PROVEN_PRE_SUBMIT_SIGNATURES.get(code)
-        if classified is not None:
-            bucket, signature = classified
-            return {"bucket": bucket, "signature": signature}
-
+    pre_submit_failure = state.get("pre_submit_failure")
+    host_failure = pre_submit_failure if isinstance(pre_submit_failure, dict) else pre_submit_host_failure
+    if (
+        isinstance(host_failure, dict)
+        and host_failure.get("output_absent") is True
+        and host_failure.get("conversation_url_absent") is True
+    ):
+        code = str(host_failure.get("code") or "")
+        if code == "ORACLE_ATTACHMENT_SIZE_PRELAUNCH_FAILED":
+            return {"bucket": PRE_SUBMIT_HOST, "signature": "oracle-attachment-size-prelaunch-limit"}
+        if code == "ORACLE_MODEL_SWITCHER_PRE_SUBMIT_FAILED":
+            return {"bucket": PRE_SUBMIT_UI, "signature": "model-option-label-missing"}
+        if code == "ORACLE_THINKING_TIME_PRE_SUBMIT_FAILED":
+            return {"bucket": PRE_SUBMIT_UI, "signature": "thinking-time-selection-unverified"}
+        if code == "ORACLE_CDP_DISCONNECT_PRE_SUBMIT_FAILED":
+            return {"bucket": PRE_SUBMIT_UI, "signature": "cdp-disconnected-before-prompt-submit"}
+        if code != "ORACLE_VERSION_RESOLUTION_PRELAUNCH_FAILED":
+            return {"bucket": UNCLASSIFIED, "signature": "unrecognized-pre-submit-host-failure"}
+        return {
+            "bucket": PRE_SUBMIT_HOST,
+            "signature": (
+                "oracle-version-resolution-prelaunch-compatibility-drift"
+                if host_failure.get("failure_reason") == "compatibility-version-drift"
+                else "oracle-version-resolution-prelaunch-timeout"
+            ),
+        }
     if lifecycle == "complete":
         if source == "exact-terminal-evidence":
             return {"bucket": COMPLETE, "signature": "terminal-harvested-output"}
@@ -218,9 +239,7 @@ def diagnose(state_root: Path | None = None) -> dict[str, Any]:
             user_confirmed_no_submission=(
                 STATE.proven_user_confirmed_no_submission(run_dir / "state.json") is not None
             ),
-            proven_pre_submit_failure=STATE.proven_pre_submit_failure(
-                run_dir / "state.json"
-            ),
+            pre_submit_host_failure=STATE.proven_pre_submit_host_failure(run_dir / "state.json"),
         )
         runs.append({
             "run_dir": str(run_dir),

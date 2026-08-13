@@ -52,14 +52,34 @@ def test_manifest_covers_runtime_and_schemas() -> None:
         'bin/chatgpt_web_multi_upstream.py',
         'bin/codexpro_agbrowse_app.py',
         'bin/codexpro_fixed_runtime_watchdog.py',
+        'bin/codexpro_harness.py',
+        'bin/codexpro_cloudflared_launchd.py',
+        'bin/codexpro_lifecycle.py',
+        'bin/codexpro_macos_launchd.py',
+        'bin/codexpro_posix_process.py',
         'bin/codexpro_project_cloudflare_bootstrap.ps1',
+        'bin/codex_web_gpt_onboarding.py',
+        'bin/codex_global_agents_setup.py',
+        'docs/FIRST_INSTALL.md',
+        'docs/ULTRA_ECONOMY_MODE.md',
+        'bin/codex_runtime_identity.py',
+        'docs/templates/codex-agents/scout.toml',
+        'docs/templates/codex-agents/implementer.toml',
+        'docs/templates/codex-agents/verifier.toml',
+        'docs/templates/codex-agents/global-agents-policy.md',
         'skills/chatgpt-pro-browser/SKILL.md',
         'skills/chatgpt-pro-browser/agents/openai.yaml',
+        'skills/chatgpt-pro-browser/scripts/build_project_context_packet.py',
         'skills/chatgpt-pro-browser/scripts/run_chatgpt_pro.py',
         'skills/chatgpt-pro-plan-handoff/scripts/run_pro_plan_handoff.py',
         'skills/chatgpt-pro-plan-handoff/schemas/*.json',
+        'skills/ultra-economy-mode/SKILL.md',
+        'skills/ultra-economy-mode/agents/openai.yaml',
         'scripts/run_v4_contract_tests.py',
+        'scripts/run_harness_canary.py',
         'contracts/install/*.json',
+        'contracts/gjc-interview-v1.schema.json',
+        'marketplace/plugins/codexpro-harness/hooks/hooks.json',
         'tests/fixtures/planner-v7-app-trace-quiescent-incident.json',
         'tests/fixtures/planner-v8-app-trace-quiescent-incident.json',
     }
@@ -67,10 +87,21 @@ def test_manifest_covers_runtime_and_schemas() -> None:
     assert not any('*' in path for path in includes if not (path.endswith('/schemas/*.json') or path == 'contracts/install/*.json'))
     package_files = set(json.loads((ROOT / 'package.json').read_text(encoding='utf-8'))['files'])
     assert {
+        'README.md',
+        'README.en.md',
+        'CONTRIBUTING.md',
+        'docs/',
         'skills/chatgpt-pro-browser/SKILL.md',
         'skills/chatgpt-pro-browser/agents/openai.yaml',
+        'skills/chatgpt-pro-browser/scripts/build_project_context_packet.py',
         'skills/chatgpt-pro-browser/scripts/run_chatgpt_pro.py',
         'skills/chatgpt-pro-browser/scripts/run_pro_browser.py',
+        'bin/codexpro_harness.py',
+        'bin/codexpro_lifecycle.py',
+        'marketplace/',
+        'install.py',
+        'doctor.py',
+        'onboard.py',
     } <= package_files
 
 
@@ -115,14 +146,15 @@ def test_package_is_publishable_and_lockfile_matches() -> None:
     assert package['name'] == lock['name'] == lock['packages']['']['name']
     assert package['version'] == lock['version'] == lock['packages']['']['version']
     assert package['license'] == lock['packages']['']['license'] == 'MIT'
-    assert package['repository']['url'] == 'git+https://github.com/ventianima-lab/codexpro-automation.git'
-    assert package['homepage'].startswith('https://github.com/ventianima-lab/codexpro-automation')
+    assert package['repository']['url'] == 'git+https://github.com/ventianima-lab/codex-web-gpt-automation.git'
+    assert package['homepage'].startswith('https://github.com/ventianima-lab/codex-web-gpt-automation')
     assert {
         'bin/chatgpt_agbrowse_bridge.py',
         'skills/chatgpt-thinking-browser/SKILL.md',
         'install.ps1',
         'LICENSE',
         'scripts/run_v4_contract_tests.py',
+        'scripts/check_docs.py',
         'contracts/install/',
     } <= set(package['files'])
 
@@ -139,3 +171,18 @@ def test_release_workflow_runs_focused_and_full_contract_checks() -> None:
     assert 'scripts/run_v4_contract_tests.py --focused' in workflow
     assert 'scripts/run_v3_contract_tests.py' in workflow
     assert 'scripts/run_v4_contract_tests.py --full' in workflow
+    assert 'windows-latest' in workflow
+    assert 'macos-14' in workflow
+
+
+def test_rebrand_keeps_legacy_plugin_id_but_updates_human_facing_names() -> None:
+    plugin = json.loads(
+        (ROOT / 'marketplace/plugins/codexpro-harness/.codex-plugin/plugin.json').read_text(encoding='utf-8')
+    )
+    hooks = (ROOT / 'marketplace/plugins/codexpro-harness/hooks/hooks.json').read_text(encoding='utf-8')
+    skill = (ROOT / 'marketplace/plugins/codexpro-harness/skills/codexpro-ultrawork/SKILL.md').read_text(encoding='utf-8')
+    assert plugin['name'] == 'codexpro-harness'
+    assert plugin['interface']['displayName'] == 'Codex Web GPT Harness'
+    assert 'CodexPro' not in plugin['description']
+    assert 'CodexPro' not in hooks
+    assert '# Codex Web GPT Ultrawork Router' in skill

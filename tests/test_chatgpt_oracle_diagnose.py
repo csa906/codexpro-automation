@@ -48,12 +48,12 @@ def write_run(
         "session_authority": session_authority,
         "terminal_harvested": terminal_harvested,
         "task_outcome": task_outcome,
-        "attachments": attachments or [],
-        "artifacts": {
+    "attachments": attachments or [],
+    "artifacts": {
             "output": str(output_path),
             "stdout": str(stdout_path),
-            "stderr": str(stderr_path),
-        },
+        "stderr": str(stderr_path),
+    },
     }), encoding="utf-8")
     return run_dir
 
@@ -117,32 +117,80 @@ def test_pre_submit_signature_outranks_post_submit_interpretation(tmp_path: Path
     assert run["signature"] == "app-mention-suggestion-absent"
 
 
-def test_attachment_size_preflight_proof_outranks_uncertain_session_authority(tmp_path: Path) -> None:
+def test_settled_model_switcher_no_cookie_failure_remains_retry_safe(tmp_path: Path) -> None:
     module = load()
     state_root = tmp_path / "oracle-state"
-    write_run(
+    run_dir = write_run(
         state_root,
-        "oversized",
+        "m" * 8,
         status="attention_required",
-        stdout="oracle 0.16.1\n",
-        stderr="The following files exceed the 1 MB limit:\n- packet.zip (7.2 MB)\n",
-        session_authority="submitted_unknown",
-        attachments=[{
-            "path": str(tmp_path / "packet.zip"),
-            "sha256": "a" * 64,
-            "size_bytes": 1024 * 1024 + 1,
-        }],
+        session_authority="pre_submit",
     )
+    state_path = run_dir / "state.json"
+    state = json.loads(state_path.read_text(encoding="utf-8"))
+    state["pre_submit_failure"] = {
+        "code": "ORACLE_MODEL_SWITCHER_PRE_SUBMIT_FAILED",
+        "output_absent": True,
+        "conversation_url_absent": True,
+    }
+    state_path.write_text(json.dumps(state), encoding="utf-8")
 
     report = module.diagnose(state_root)
     run = report["unresolved_runs"][0]
 
-    assert run["bucket"] == "pre-submit-host-environment"
-    assert run["signature"] == "oracle-attachment-size-preflight-rejected"
-    assert report["safe_for_fresh_run_buckets"] == [
-        "pre-submit-host-environment",
-        "pre-submit-ui-contract",
-    ]
+    assert run["bucket"] == "pre-submit-ui-contract"
+    assert run["signature"] == "model-option-label-missing"
+
+
+def test_settled_thinking_time_failure_remains_retry_safe(tmp_path: Path) -> None:
+    module = load()
+    state_root = tmp_path / "oracle-state"
+    run_dir = write_run(
+        state_root,
+        "t" * 8,
+        status="attention_required",
+        session_authority="pre_submit",
+    )
+    state_path = run_dir / "state.json"
+    state = json.loads(state_path.read_text(encoding="utf-8"))
+    state["pre_submit_failure"] = {
+        "code": "ORACLE_THINKING_TIME_PRE_SUBMIT_FAILED",
+        "output_absent": True,
+        "conversation_url_absent": True,
+    }
+    state_path.write_text(json.dumps(state), encoding="utf-8")
+
+    report = module.diagnose(state_root)
+    run = report["unresolved_runs"][0]
+
+    assert run["bucket"] == "pre-submit-ui-contract"
+    assert run["signature"] == "thinking-time-selection-unverified"
+
+
+def test_settled_cdp_disconnect_before_prompt_submit_remains_retry_safe(tmp_path: Path) -> None:
+    module = load()
+    state_root = tmp_path / "oracle-state"
+    run_dir = write_run(
+        state_root,
+        "c" * 8,
+        status="attention_required",
+        session_authority="pre_submit",
+    )
+    state_path = run_dir / "state.json"
+    state = json.loads(state_path.read_text(encoding="utf-8"))
+    state["pre_submit_failure"] = {
+        "code": "ORACLE_CDP_DISCONNECT_PRE_SUBMIT_FAILED",
+        "output_absent": True,
+        "conversation_url_absent": True,
+        "prompt_submitted": False,
+    }
+    state_path.write_text(json.dumps(state), encoding="utf-8")
+
+    report = module.diagnose(state_root)
+    run = report["unresolved_runs"][0]
+
+    assert run["bucket"] == "pre-submit-ui-contract"
+    assert run["signature"] == "cdp-disconnected-before-prompt-submit"
 
 
 def test_durable_terminal_run_is_complete_and_not_executed_is_separated(tmp_path: Path) -> None:
@@ -286,6 +334,75 @@ def test_host_watchdog_transition_is_post_submit_and_never_retry_safe() -> None:
         "bucket": "post-submit-provider-incomplete",
         "signature": "host-wall-clock-expired-process-preserved",
     }
+
+
+def test_version_resolution_prelaunch_failure_is_host_safe_only_with_absence_proof() -> None:
+    module = load()
+    verdict = module.classify_run(
+        {
+            "status": "attention_required",
+            "session_authority": "pre_submit",
+            "terminal_harvested": False,
+            "task_outcome": "pending",
+            "pre_submit_failure": {
+                "code": "ORACLE_VERSION_RESOLUTION_PRELAUNCH_FAILED",
+                "output_absent": True,
+                "conversation_url_absent": True,
+            },
+        },
+        stdout_text="",
+        has_output=False,
+    )
+
+    assert verdict == {
+        "bucket": "pre-submit-host-environment",
+        "signature": "oracle-version-resolution-prelaunch-timeout",
+    }
+
+
+def test_oracle_attachment_size_preflight_is_host_safe_with_no_conversation() -> None:
+    module = load()
+    verdict = module.classify_run(
+        {
+            "status": "attention_required",
+            "session_authority": "submitted_unknown",
+            "terminal_harvested": False,
+            "task_outcome": "pending",
+            "pre_submit_failure": {
+                "code": "ORACLE_ATTACHMENT_SIZE_PRELAUNCH_FAILED",
+                "output_absent": True,
+                "conversation_url_absent": True,
+            },
+        },
+        stdout_text="",
+        has_output=False,
+    )
+
+    assert verdict == {
+        "bucket": "pre-submit-host-environment",
+        "signature": "oracle-attachment-size-prelaunch-limit",
+    }
+
+
+def test_version_compatibility_drift_is_a_retry_safe_pre_submit_host_failure(tmp_path: Path) -> None:
+    module = load()
+    state_root = tmp_path / "oracle-state"
+    write_run(state_root, "d" * 8, status="failed")
+    run_dir = state_root / "projects" / "projectkey" / "runs" / ("d" * 8)
+    state_path = run_dir / "state.json"
+    state = json.loads(state_path.read_text(encoding="utf-8"))
+    state["oracle"] = {"resolved_version": "unresolved"}
+    state["session_authority"] = "pre_submit"
+    state_path.write_text(json.dumps(state), encoding="utf-8")
+    (run_dir / "stderr.log").write_text(
+        "version resolution failed: Oracle compatibility is validated only for the tested version\n",
+        encoding="utf-8",
+    )
+
+    verdict = module.diagnose(state_root)["unresolved_runs"][0]
+
+    assert verdict["bucket"] == "pre-submit-host-environment"
+    assert verdict["signature"] == "oracle-version-resolution-prelaunch-compatibility-drift"
 
 
 def test_user_confirmed_no_submission_overrides_prompt_timeout_only_with_validated_proof() -> None:

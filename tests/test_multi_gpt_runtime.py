@@ -5,6 +5,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 SERVER = ROOT / "mcp_servers" / "multi-gpt" / "server.mjs"
+MCP_PROCESS_TIMEOUT_SECONDS = 30
 
 
 def mcp_response(method: str, params: dict) -> dict:
@@ -15,7 +16,9 @@ def mcp_response(method: str, params: dict) -> dict:
         text=True,
         capture_output=True,
         check=True,
-        timeout=10,
+        # CI can take longer than a local shell to cold-start Node and load the
+        # MCP server. Keep this bounded so a genuinely hung server still fails.
+        timeout=MCP_PROCESS_TIMEOUT_SECONDS,
     )
     return json.loads(completed.stdout.strip())
 
@@ -72,6 +75,8 @@ def test_runtime_defaults_reject_overrides_and_pin_every_stage_argv() -> None:
     assert "args.splice" not in launcher
 
     assert "function resolveCodexCommand()" in source
+    assert "process.env.MULTI_GPT_CODEX_CLI_PATH" in source
+    assert "process.env.CODEX_CLI_PATH" in source
     assert "codex.opencodex-real.cmd" in source
     assert "existsSync(openCodexReal) ? openCodexReal : 'codex.cmd'" in source
 
@@ -84,12 +89,24 @@ def test_job_and_result_surfaces_preserve_contract_evidence() -> None:
     assert "enforced_launch_contract: job.enforced_launch_contract" in source
 
 
-def test_packaging_and_installer_deploy_multi_gpt_sources() -> None:
+def test_packaging_and_installer_keep_multi_gpt_opt_in() -> None:
     manifest = json.loads((ROOT / "install-manifest.json").read_text(encoding="utf-8"))
     package = json.loads((ROOT / "package.json").read_text(encoding="utf-8"))
     required = {"mcp_servers/multi-gpt/server.mjs", "skills/multi-gpt/SKILL.md"}
-    assert required <= set(manifest["include"])
+    assert required.isdisjoint(set(manifest["include"]))
+    optional = manifest["optional_components"]["local_multi_gpt"]
+    assert optional["default_install"] is False
+    assert required <= set(optional["include"])
+    assert optional["upstream_ref"] == "4f5e130fe12f9841eb956c69d8316871c4e955f7"
     assert required <= set(package["files"])
 
     installer = (ROOT / "install.ps1").read_text(encoding="utf-8")
     assert "elseif($pattern.StartsWith('mcp_servers/')){Join-Path $Root 'mcp_servers'}" in installer
+    assert "Local Multi-GPT도 설치할까요? [y/N]" in (ROOT / "install-manifest.json").read_text(encoding="utf-8")
+    assert "EnableLocalMultiGpt" in installer
+    assert "Console]::IsInputRedirected" in installer
+
+
+def test_planner_failure_preserves_codex_stderr_for_diagnosis() -> None:
+    source = SERVER.read_text(encoding="utf-8")
+    assert "stderr: planner.stderr || ''" in source

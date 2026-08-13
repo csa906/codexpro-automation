@@ -1,138 +1,120 @@
-# Codex Web GPT Orchestrator
+<p align="center">
+  <img src="docs/assets/brand/banner.svg" alt="Codex Web GPT Automation" width="100%">
+</p>
 
-한국어 | [English](README.en.md)
+<p align="center">
+  <a href="https://github.com/ventianima-lab/codex-web-gpt-automation/actions/workflows/release-portability.yml"><img alt="CI" src="https://github.com/ventianima-lab/codex-web-gpt-automation/actions/workflows/release-portability.yml/badge.svg"></a>
+  <a href="https://github.com/ventianima-lab/codex-web-gpt-automation/releases"><img alt="Release" src="https://img.shields.io/github/v/release/ventianima-lab/codex-web-gpt-automation?display_name=tag&sort=semver"></a>
+  <a href="LICENSE"><img alt="License" src="https://img.shields.io/github/license/ventianima-lab/codex-web-gpt-automation"></a>
+  <img alt="Platforms" src="https://img.shields.io/badge/platform-Windows%20%7C%20macOS-334155">
+  <img alt="Oracle" src="https://img.shields.io/badge/Oracle-0.17.1-8B5CF6">
+  <img alt="DevSpace" src="https://img.shields.io/badge/DevSpace-1.0.4-14B8A6">
+</p>
 
-Codex가 웹 ChatGPT에 계획·리서치·검토·코드 구현을 맡기고, 로컬 Codex는
-제출·복구·해시·최종 테스트만 담당하도록 만드는 Windows용 자동화 도구입니다.
+<p align="center">
+  <strong>로컬 Codex 프로젝트에 웹 ChatGPT를 안전하고 복구 가능한 실행 계층으로 연결합니다.</strong>
+</p>
 
-이 프로젝트는 다음 두 도구를 연결합니다.
+<p align="center">
+  한국어 · <a href="README.en.md">English</a> · <a href="docs/README.md">문서 전체 보기</a>
+</p>
 
-- [Oracle](https://github.com/steipete/oracle): 로그인된 ChatGPT 브라우저
-  세션 생성, 모델 선택, 응답 대기와 결과 회수
-- [DevSpace](https://github.com/Waishnav/devspace): 사용자가 허용한 로컬
-  프로젝트의 파일 읽기·쓰기와 명령 실행
+> [!IMPORTANT]
+> 이 저장소는 커뮤니티 프로젝트이며 OpenAI의 공식 제품이 아닙니다. ChatGPT
+> 로그인, Developer Mode 앱 등록, DevSpace Owner 승인은 사용자가 직접 수행합니다.
 
-일반 GPT 작업은 Oracle이 `@DevSpace`와 미션 파일 경로를 ChatGPT에
-전달합니다. Pro 작업은 DevSpace 없이 정확한 첨부 파일만 사용합니다.
+## 왜 이 도구를 쓰나요?
 
-## 이 도구로 할 수 있는 일
+| Guarded | Recoverable | Web-first | Cross-platform |
+|---|---|---|---|
+| 정확한 프로젝트 루트와 미션 SHA를 실행 전에 고정합니다. | 끊긴 실행을 새로 보내지 않고 기존 Oracle 세션에서 회수합니다. | 계획·리서치·구현·검토를 웹 ChatGPT 세션에 분리해 맡깁니다. | 영수증 기반 설치·롤백을 Windows와 macOS에서 검증합니다. |
 
-- 웹 GPT가 로컬 프로젝트를 읽고 직접 수정·테스트
-- 계획, 검토, 수정, 지휘, 심층 리서치 모드
-- 여러 독립 ChatGPT 세션을 동시에 실행하는 Web Multi-GPT
-- PC 로컬 Codex 레인을 병렬 실행하는 읽기 전용 Local Multi-GPT
-- 계획 → 검토 → 구현 → 최종 검증을 연결하는 종합모드
-- 프로젝트별 실행 잠금, 미션·첨부 해시, 정확한 세션 복구
-- 다른 프로젝트의 ChatGPT 작업과 분리된 브라우저 프로필
-- 작업 완료 후 Oracle 소유 대화 자동 보관
-- 설치 파일 백업, 설치 영수증, 롤백
-
-## 동작 구조
+Codex Web GPT Automation은 [Oracle](https://github.com/steipete/oracle)로
+로그인된 ChatGPT 브라우저 세션을 실행하고,
+[DevSpace](https://github.com/Waishnav/devspace)로 사용자가 허용한 프로젝트만
+웹 GPT에 노출합니다. 로컬 Codex는 제출 신원, 복구, 해시, 최종 결정론적
+테스트를 책임집니다.
 
 ```text
-사용자 요청
-    ↓
-Codex가 UTF-8 미션 파일과 실행 manifest 작성
-    ↓
-Oracle이 로그인된 ChatGPT 세션 실행
-    ├─ 일반 GPT: @DevSpace + 미션 경로
-    └─ Pro: 미션 + 고정 해시 첨부 파일
-    ↓
-웹 GPT가 프로젝트 탐색·계획·구현·테스트
-    ↓
-Oracle이 결과를 로컬 파일로 회수
-    ↓
-Codex가 해시·상태·최종 결정론적 테스트만 확인
+로컬 Codex
+  └─ UTF-8 미션 + exact project root + SHA-256
+       └─ Oracle → 로그인된 웹 ChatGPT 세션
+            └─ DevSpace → 승인된 프로젝트만 읽기/작업
+                 └─ 결과 회수 → 신원·해시·최종 gate
 ```
 
-호스트 상태와 ChatGPT 출력은 DevSpace 프로젝트 밖의
-`%USERPROFILE%\.codex\state\chatgpt-oracle`에 저장됩니다.
+## 3분 설치
 
-## 모드
-
-| 모드 | CLI/영어 이름 | 용도 | 실행 방식 |
-|---|---|---|---|
-| 일반 GPT | `direct` / GPT | 질문·분석·작은 작업 | Oracle + DevSpace, 단일 세션 |
-| 계획 | `plan` / plan | 구현 전 설계 | Oracle + DevSpace, 읽기 전용 |
-| 검토 | `review` / review | 코드·계획의 독립 검토 | Oracle + DevSpace, 읽기 전용 |
-| 수정 | `edit` / edit | 정해진 범위의 수정·테스트 | Oracle + DevSpace |
-| 지휘 | `orchestrator` / orchestrator | 계획이 확정된 작업을 한 GPT가 끝까지 수행 | Oracle + DevSpace, 단일 세션 |
-| 심층 리서치 | `deep-research` / deep research | 공개 자료와 프로젝트 증거 조사 | Oracle Deep Research + DevSpace |
-| Web Multi-GPT | Web Multi-GPT | 여러 관점의 독립 탐색·검증 | 독립 Oracle 세션 2~25개 + merger |
-| Local Multi-GPT | Local Multi-GPT | 로컬 병렬 자문·반례 탐색 | `gpt-5.6-luna` + `max` 고정, 읽기 전용 |
-| 종합모드 | comprehensive mode | 계획부터 구현·최종 게이트까지 자동 연결 | plan → optional Pro/Multi → review → implementation → gate |
-| Pro | `pro` / Pro | 독립적인 최종 판단·설계 검토 후 결과만 반환 | Oracle 첨부 전용, DevSpace 없음 |
-
-지휘는 웹 제출 한 번으로 끝나는 실행 모드입니다. 종합모드는 지휘와 같은
-구현 단계를 포함하면서 계획·독립 검토·선택적 Pro/Web Multi·최종 게이트를
-추가한 다단계 워크플로입니다.
-
-단순 Pro는 종합모드와 별개인 한 번짜리 검토 경로입니다. 첨부된 계획·코드·문서를
-검토하고 결과 파일을 반환하면 끝나며, 자동으로 구현이나 다음 단계로 넘어가지
-않습니다. 계획부터 구현까지 이어야 할 때만 종합모드를 사용합니다.
-
-Local Multi-GPT와 Web Multi-GPT는 서로 다른 경로입니다. Local Multi-GPT는
-PC의 Codex 하위 레인을 사용하는 선택적 자문 도구이며, 모든 단계가
-`gpt-5.6-luna`와 `max` 사고 레벨로 고정됩니다. 다른 모델이나 사고
-레벨을 요청하면 하위 프로세스를 시작하기 전에 거부합니다. Web Multi-GPT는
-Oracle이 여러 독립 ChatGPT 웹 세션을 실행한 뒤 결과를 병합합니다.
-
-## 요구사항
-
-- Windows 11
-- Python
-- Node.js 22.19 이상, 27 미만
-- Git for Windows / Git Bash
-- Tailscale
-- 브라우저에서 ChatGPT에 로그인된 Oracle 프로필
-- ChatGPT Developer Mode에 최초 한 번 수동 등록한 DevSpace 앱
-
-현재 검증된 조합은 Oracle `0.16.1`과 DevSpace `1.0.4`입니다. 설치기는
-정확한 파일 해시가 일치할 때만 Windows 호환 패치를 적용합니다.
-
-## 설치
+### Windows
 
 ```powershell
-git clone https://github.com/ventianima-lab/codexpro-automation.git
-cd codexpro-automation
+git clone https://github.com/ventianima-lab/codex-web-gpt-automation.git
+cd codex-web-gpt-automation
 .\install.ps1 -WhatIf
 .\install.ps1
+python doctor.py
 ```
 
-설치기는 기존 파일을 백업하고
-`%USERPROFILE%\.codex\receipts`에 설치 영수증을 남깁니다.
+### macOS
 
-## DevSpace 최초 연결
-
-DevSpace 앱은 프로젝트마다 설치하는 것이 아닙니다. 앱 하나에 허용할
-프로젝트 루트를 여러 번 `--root`로 지정합니다.
-
-```powershell
-python skills/chatgpt-workspace-setup/scripts/devspace_tailscale_setup.py setup `
-  --root C:\projects\alpha `
-  --root C:\projects\beta `
-  --hostname your-device.your-tailnet.ts.net `
-  --public-port 8443 `
-  --dry-run
+```bash
+git clone https://github.com/ventianima-lab/codex-web-gpt-automation.git
+cd codex-web-gpt-automation
+python3 install.py --dry-run
+python3 install.py
+python3 doctor.py
 ```
 
-내용을 확인한 뒤 `--dry-run`을 `--apply`로 바꿉니다. ChatGPT Developer
-Mode에는 다음 앱 하나만 수동으로 등록합니다.
+대화형 최초 설치는 선택 기능인 Local Multi-GPT를 설치할지 묻고 기본값은
+`No`입니다. 설치기는 기존 전역 파일을 백업하고 `~/.codex/receipts`에 영수증을
+남깁니다. 설치 후 Codex를 재시작하세요.
 
-- 이름: `DevSpace`
-- URL: `https://your-device.your-tailnet.ts.net:8443/mcp`
+> [!NOTE]
+> 파일 설치만으로 ChatGPT 연결이 끝나지는 않습니다. 아래 최초 연결 절차를
+> 한 번 완료해야 합니다.
 
-Owner 승인을 완료한 뒤에는 매 작업마다 앱 목록·권한·URL을 다시 확인하거나
-앱을 재등록하지 않습니다. 새 프로젝트는 DevSpace 허용 루트에만 추가합니다.
-ChatGPT 설정·앱 목록·권한·삭제·선택 UI를 자동화하지 않습니다.
+## 최초 연결 순서
 
-자세한 과정은
-[DevSpace + Tailscale 설정](docs/DEVSPACE_TAILSCALE_SETUP.md)을
-참고하세요.
+순서를 바꾸지 않는 것이 중요합니다. 전체 명령과 분기 기준은
+[최초 설치 가이드](docs/FIRST_INSTALL.md)가 권위 문서입니다.
 
-## 일반 GPT 실행 예시
+1. **고정 공개 경로 선택** — Tailscale Funnel 권장, Cloudflare Named Tunnel,
+   ngrok 고정 도메인, custom HTTPS proxy 지원
+2. **DevSpace 설정** — 사용할 모든 exact project root와 public origin 등록
+3. **Owner 승인 정보 보존** — 암호를 CLI·Git·로그에 복사하지 않음
+4. **재부팅 복구 검증** — local/public endpoint와 root persistence 확인
+5. **Oracle 전용 브라우저 로그인** — 일상 Chrome과 분리된 프로필
+6. **ChatGPT 앱 수동 등록** — 이름 `codex`, URL `https://고정주소/mcp`
+7. **일반 GPT 연결 검사** — Pro를 소비하지 않고 `@codex` read probe 수행
 
-프로젝트 안에 UTF-8 미션 파일을 만든 뒤 먼저 미리보기 합니다.
+ChatGPT 앱 `codex` 등록은 준비가 끝난 뒤 **최초 한 번 수동 등록**하는
+절차입니다. ChatGPT 설정·앱 목록·권한·삭제·선택 UI를 자동화하지 않습니다.
+
+새 프로젝트를 추가할 때는 기존 root를 보존한 전체 목록에 exact folder만
+추가합니다. 앱 설정은 매 작업마다 재검사하거나 자동 조작하지 않습니다.
+
+## 모드 선택
+
+| 원하는 결과 | 모드 | 실행 경로 |
+|---|---|---|
+| 질문·분석·작은 작업 | `direct` | Oracle + DevSpace |
+| 구현 전 설계 | `plan` | 읽기 전용 웹 세션 |
+| 코드·계획 독립 검토 | `review` | 읽기 전용 웹 세션 |
+| 범위가 정해진 수정 | `edit` | 웹 구현·테스트 |
+| 한 번에 끝내는 실행 | `orchestrator` | 단일 웹 세션 |
+| 공개 자료 심층 조사 | `deep-research` | Oracle Deep Research |
+| 독립 관점 병렬 탐색 | Web Multi-GPT | 여러 Oracle 세션 + merger |
+| PC 로컬 자문·반례 탐색 | Local Multi-GPT | 선택 설치, Luna Max, 읽기 전용 |
+| 계획부터 최종 gate까지 | comprehensive mode | 단계별 웹 워크플로 |
+| 로컬 비용 최소화 | `ultra-economy` | Luna Max 지휘 + 분리 웹 단계 |
+| 독립 최종 판단 | `pro` | GPT-5.6 Sol Pro + 읽기 전용 DevSpace |
+
+자세한 선택 기준은 [전역 라우팅](docs/GLOBAL_CHATGPT_ROUTING.md), 초절약모드는
+[초절약모드 가이드](docs/ULTRA_ECONOMY_MODE.md)를 참고하세요.
+
+## 실행 예시
+
+프로젝트 안에 UTF-8 미션을 만들고 먼저 dry-run으로 신원을 확인합니다.
 
 ```powershell
 python "$env:USERPROFILE\.codex\bin\chatgpt_oracle_dispatch.py" `
@@ -146,69 +128,39 @@ python "$env:USERPROFILE\.codex\bin\chatgpt_oracle_dispatch.py" `
 
 실제 실행 승인이 있을 때만 `--dry-run`을 제거합니다.
 
-## Pro 실행 예시
+## 안전 계약
 
-Pro는 프로젝트 앱을 사용하지 않습니다. 미션과 필요한 증거 파일을 정확한
-해시로 고정해 첨부합니다.
+- 프로젝트마다 활성 또는 불확실한 Oracle 작업은 하나만 둡니다.
+- 새 프로젝트의 첫 DevSpace 제출 전에 exact root 등록을 확인합니다.
+- Pro는 기본적으로 read-only이며 쓰기·셸·명령 실행을 허용하지 않습니다.
+- 제출 후 오류는 기존 실행 신원으로 정확히 복구하며, 저장된 slug와 대화
+  URL만 회수하고 자동 재제출하지 않습니다.
+- 브라우저나 로컬 프로세스 종료만으로 웹 작업 실패를 판정하지 않습니다.
+- 비밀, Owner 암호, OAuth 토큰, 브라우저 프로필은 저장소에 넣지 않습니다.
+- `codexpro-*` 이름은 기존 영수증·스키마·복구 자산의 내부 호환 ID일 뿐,
+  새 작업용 제품명이나 실행 경로가 아닙니다.
 
-```powershell
-python "$env:USERPROFILE\.codex\bin\chatgpt_oracle_dispatch.py" `
-  --mode pro `
-  --project-root C:\project `
-  --mission-path C:\project\pro.md `
-  --attachment C:\project\evidence.zip `
-  --manifest-output C:\project\.ai-bridge\pro.json `
-  --dry-run
-```
+보안 문제는 공개 이슈 대신 [보안 정책](SECURITY.md)의 비공개 경로로 알려주세요.
 
-## 실행과 복구 원칙
+## 문서 지도
 
-- 같은 프로젝트에는 활성 또는 불확실한 Oracle 작업 하나만 허용합니다.
-- 다른 프로젝트는 서로 분리된 프로필로 병렬 실행할 수 있습니다.
-- Web Multi-GPT는 하나의 부모 작업 안에서 최대 5개 세션씩 wave로 실행합니다.
-- 비Pro의 무거운 작업은 1차 90분과 복구 90분, 실효 약 180분까지 기다립니다.
-- 브라우저나 로컬 프로세스 종료는 웹 작업 실패의 증거가 아닙니다.
-- 복구는 저장된 정확한 Oracle slug와 대화 URL만 사용하며 재제출하지 않습니다.
-- 완료에는 Oracle 종료 코드 0과 비어 있지 않은 새 결과 파일이 모두 필요합니다.
+| 시작 | 운영 | 고급 모드 | 프로젝트 |
+|---|---|---|---|
+| [최초 설치](docs/FIRST_INSTALL.md) | [DevSpace + Tailscale](docs/DEVSPACE_TAILSCALE_SETUP.md) | [초절약모드](docs/ULTRA_ECONOMY_MODE.md) | [아키텍처 개요](docs/ARCHITECTURE.md) |
+| [문서 인덱스](docs/README.md) | [전역 라우팅](docs/GLOBAL_CHATGPT_ROUTING.md) | [Local Multi-GPT](docs/LOCAL_MULTI_GPT.md) | [변경 기록](docs/CHANGELOG.md) |
+| [기여 가이드](CONTRIBUTING.md) | [macOS Ultrawork](docs/MACOS_ULTRAWORK.md) | [레거시 경계](docs/FROZEN_LEGACY.md) | [버전 정책](docs/VERSIONING.md) |
 
-정확한 실행을 회수하려면:
+## 버전과 지원
 
-```powershell
-python "$env:USERPROFILE\.codex\bin\chatgpt_oracle_run.py" recover `
-  --run-dir C:\exact\oracle-run `
-  --action harvest
-```
+이 프로젝트는 `MAJOR.MINOR.PATCH` 형식의 [Semantic Versioning](https://semver.org/)을
+사용합니다. `package.json`, `package-lock.json`, `install-manifest.json`, Git 태그와
+GitHub Release가 같은 버전을 가리켜야 합니다. 업그레이드 전에는
+[변경 기록](docs/CHANGELOG.md)을 확인하세요.
 
-## 업데이트와 제거
-
-```powershell
-.\install.ps1 -WhatIf
-.\install.ps1
-.\rollback.ps1
-.\uninstall.ps1
-```
-
-기존에 저장된 구형 실행을 복구해야 하는 컴퓨터에서만
-`-InstallLegacyRecoveryDependency`를 사용합니다.
-
-## 문서
-
-- [전역 ChatGPT 라우팅과 모드 선택](docs/GLOBAL_CHATGPT_ROUTING.md)
-- [DevSpace + Tailscale 최초 설정](docs/DEVSPACE_TAILSCALE_SETUP.md)
-- [기술 변경 기록](docs/CHANGELOG.md)
-- [구형 실행 복구용 동결 자산](docs/FROZEN_LEGACY.md)
-- [릴리스 검증 절차](docs/RELEASE_CHECKLIST.md)
-- [보안 정책](SECURITY.md)
-- [제3자 라이선스](THIRD_PARTY_NOTICES.md)
-
-## 레거시 호환
-
-과거 CodexPro·agbrowse 기반 실행 파일은 이미 저장된 구형 작업을 원래
-실행 신원으로 정확히 복구하기 위해서만 남아 있습니다. 새 작업의 실행 경로나 fallback으로 사용하지
-않습니다. 상세 파일 목록은 [동결 자산 문서](docs/FROZEN_LEGACY.md)에
-분리했습니다.
+현재 검증 기준은 Oracle `0.17.1`, DevSpace `1.0.4`, Node.js `>=22.19 <27`,
+Windows 11 및 macOS 12 이상입니다.
 
 ## 라이선스
 
-MIT License. Oracle·DevSpace 등 제3자 구성요소의 저작권과 라이선스는
+[MIT License](LICENSE). Oracle·DevSpace 등 제3자 구성요소의 저작권과 라이선스는
 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)에 정리되어 있습니다.

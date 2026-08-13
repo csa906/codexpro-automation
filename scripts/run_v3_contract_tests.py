@@ -4,9 +4,11 @@ import importlib.util
 import json
 import os
 import shutil
+import stat
 import subprocess
 import sys
 import tempfile
+import time
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -332,10 +334,64 @@ def run_driver(root: Path) -> None:
             os.environ[RUNTIME.FEATURE_ENV] = previous
 
 
+def cleanup_contract_root(path: Path, *, expected_parent: Path, attempts: int = 8) -> None:
+    """Tolerate short Windows Git/antivirus races without leaking test repos."""
+    expected_parent = expected_parent.resolve()
+    resolved = path.resolve()
+    if resolved.parent != expected_parent or not resolved.name.startswith("codexpro-v3-contract-"):
+        raise RuntimeError(f"refusing unsafe contract cleanup: {resolved}")
+
+    def clear_readonly(function, target, error):
+        try:
+            os.chmod(target, stat.S_IWRITE)
+            function(target)
+        except OSError:
+            # Python 3.11's shutil callback receives sys.exc_info(), while
+            # newer onexc receives the exception directly.  The release
+            # matrix intentionally stays on 3.11, so preserve both shapes.
+            if isinstance(error, tuple) and len(error) > 1:
+                raise error[1]
+            raise error
+
+    for attempt in range(max(1, attempts)):
+        try:
+            if os.name == "nt":
+                for candidate in resolved.rglob("*"):
+                    try:
+                        os.chmod(candidate, stat.S_IREAD | stat.S_IWRITE)
+                    except OSError:
+                        pass
+                shutil.rmtree(resolved, onerror=clear_readonly)
+            else:
+                # POSIX directories require the execute bit for traversal.
+                # Windows-style chmod(0600) would make cleanup fail on macOS.
+                shutil.rmtree(resolved)
+            return
+        except FileNotFoundError:
+            return
+        except OSError:
+            if attempt + 1 >= attempts:
+                raise
+            time.sleep(0.2 * (attempt + 1))
+
+
 def main() -> int:
     results: list[dict[str, str]] = []
-    with tempfile.TemporaryDirectory(prefix="codexpro-v3-contract-") as temp:
-        base = Path(temp)
+    git_config = {
+        "GIT_CONFIG_COUNT": "2",
+        "GIT_CONFIG_KEY_0": "gc.auto",
+        "GIT_CONFIG_VALUE_0": "0",
+        "GIT_CONFIG_KEY_1": "maintenance.auto",
+        "GIT_CONFIG_VALUE_1": "false",
+    }
+    previous_git_config = {name: os.environ.get(name) for name in git_config}
+    os.environ.update(git_config)
+    temp_parent = Path(tempfile.gettempdir()).resolve()
+    if os.name == "nt" and os.environ.get("LOCALAPPDATA"):
+        temp_parent = (Path(os.environ["LOCALAPPDATA"]) / "Temp").resolve()
+        temp_parent.mkdir(parents=True, exist_ok=True)
+    base = Path(tempfile.mkdtemp(prefix="codexpro-v3-contract-", dir=temp_parent))
+    try:
         for name, function in (
             ("authority", run_authority),
             ("process-identity", run_process),
@@ -359,6 +415,15 @@ def main() -> int:
                 }, sort_keys=True, default=str), file=sys.stderr)
                 raise
             results.append({"name": name, "result": "PASS"})
+    finally:
+        try:
+            cleanup_contract_root(base, expected_parent=temp_parent)
+        finally:
+            for name, previous in previous_git_config.items():
+                if previous is None:
+                    os.environ.pop(name, None)
+                else:
+                    os.environ[name] = previous
     print(json.dumps({"status": "PASS", "tests": results}, sort_keys=True))
     return 0
 

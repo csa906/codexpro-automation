@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import importlib.util
 import json
 import os
 import re
@@ -13,6 +14,11 @@ from typing import Any, Sequence
 SUPPORTED_VERSION = "1.0.4"
 CREATE_NO_WINDOW = 0x08000000
 PATCHES = {
+    "dist/server.js": {
+        "patch": "directory-read.patch",
+        "pristine": "c49c1c607b42e040cdf0b15d5a4a93cfef9ddb8147d492a3cfa2a8c3889dab24",
+        "patched": "d5d9b08c482b282f3390f415d69d460f4ee844046962a4013f11612cbb6b52e0",
+    },
     "dist/workspaces.js": {
         "patch": "workspaces.patch",
         "pristine": "b4438d551f5ecccfa7942f8ec92f16fda1b0ab7b3256014c8983404acb0b9dcb",
@@ -52,6 +58,11 @@ def _candidate_roots() -> list[Path]:
     candidates = [appdata / "npm" / "node_modules" / "@waishnav" / "devspace"]
     local = Path(os.environ.get("LOCALAPPDATA") or (Path.home() / "AppData" / "Local"))
     candidates.extend((local / "npm-cache" / "_npx").glob("*/node_modules/@waishnav/devspace"))
+    if os.name != "nt":
+        candidates.extend((Path.home() / ".npm" / "_npx").glob("*/node_modules/@waishnav/devspace"))
+        completed = subprocess.run(["npm", "root", "--global"], capture_output=True, text=True, check=False)
+        if completed.returncode == 0 and completed.stdout.strip():
+            candidates.append(Path(completed.stdout.strip()) / "@waishnav" / "devspace")
     return sorted(
         {path.resolve() for path in candidates if path.is_dir()},
         key=lambda path: path.stat().st_mtime,
@@ -68,6 +79,63 @@ def resolve_package_roots(version: str = SUPPORTED_VERSION) -> list[Path]:
             {"version": version, "candidates": [str(path) for path in _candidate_roots()[:8]]},
         )
     return roots
+
+
+def check_native_runtime(
+    *,
+    package_root: Path | None = None,
+    runner: Any = subprocess.run,
+    allow_package_absent: bool = False,
+) -> dict[str, Any]:
+    """Prove the tested better-sqlite3 binding loads under the active Node runtime."""
+    try:
+        roots = (
+            resolve_package_roots()
+            if package_root is None
+            else [package_root.expanduser().resolve(strict=True)]
+        )
+    except DevSpaceCompatError as exc:
+        if allow_package_absent and exc.code == "DEVSPACE_PACKAGE_NOT_FOUND":
+            return {"ok": True, "status": "package-absent", "version": SUPPORTED_VERSION}
+        raise
+    node = shutil.which("node")
+    if not node:
+        raise DevSpaceCompatError("DEVSPACE_NODE_MISSING", "Node.js is required for DevSpace")
+    checked: list[str] = []
+    source = (
+        "const {createRequire}=require('node:module');"
+        "const r=createRequire(process.cwd()+'/package.json');"
+        "const Database=r('better-sqlite3');"
+        "const db=new Database(':memory:');db.close();"
+    )
+    for root in roots:
+        completed = runner(
+            [node, "-e", source],
+            cwd=str(root),
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            check=False,
+            timeout=30,
+            **_git_kwargs(),
+        )
+        if completed.returncode != 0:
+            raise DevSpaceCompatError(
+                "DEVSPACE_NATIVE_BINDING_UNAVAILABLE",
+                "DevSpace better-sqlite3 could not load under the active Node runtime",
+                {
+                    "root": str(root),
+                    "version": SUPPORTED_VERSION,
+                    "stderr": (completed.stderr or "").strip()[-1200:],
+                    "next_action": (
+                        "Review `npm install-scripts ls`, explicitly approve only the tested "
+                        "DevSpace native dependency scripts, then rebuild better-sqlite3."
+                    ),
+                },
+            )
+        checked.append(str(root))
+    return {"ok": True, "status": "loadable", "version": SUPPORTED_VERSION, "package_roots": checked}
 
 
 def patch_root() -> Path:
@@ -140,10 +208,16 @@ def _powershell_json(script: str) -> dict[str, Any] | None:
 
 def current_devspace_service_identity(local_port: int = 7676) -> dict[str, Any] | None:
     if os.name != "nt":
-        raise DevSpaceCompatError(
-            "DEVSPACE_SERVICE_PROBE_UNSUPPORTED",
-            "automatic DevSpace restart proof is currently implemented for Windows only",
-        )
+        path = Path(__file__).resolve().with_name("codexpro_posix_process.py")
+        spec = importlib.util.spec_from_file_location("codexpro_posix_process_runtime", path)
+        if spec is None or spec.loader is None:
+            raise DevSpaceCompatError("DEVSPACE_SERVICE_PROBE_UNAVAILABLE", "POSIX identity module unavailable")
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        try:
+            return module.listener_identity(local_port)
+        except module.ProcessIdentityError as exc:
+            raise DevSpaceCompatError("DEVSPACE_SERVICE_PROBE_FAILED", str(exc)) from exc
     script = (
         f"$c=Get-NetTCPConnection -State Listen -LocalPort {int(local_port)} "
         "-ErrorAction SilentlyContinue | Select-Object -First 1; "
@@ -168,10 +242,21 @@ def _assert_devspace_service_identity(
         )
     command_line = str(value.get("command_line") or "")
     normalized = command_line.replace("\\", "/").casefold()
+    normalized = re.sub(r"/+", "/", normalized)
+    normalized = normalized.replace("/.bin/../", "/")
     expected_cli_paths = [
         str(root / "dist" / "cli.js").replace("\\", "/").casefold()
         for root in package_roots
     ]
+    if os.name != "nt":
+        for root in package_roots:
+            cli = root / "dist" / "cli.js"
+            shim = root.parents[1] / ".bin" / "devspace"
+            try:
+                if shim.is_symlink() and shim.resolve(strict=True) == cli.resolve(strict=True):
+                    expected_cli_paths.append(str(shim).casefold())
+            except OSError:
+                continue
     if not any(
         expected in normalized
         and re.search(rf"{re.escape(expected)}(?:\"|\s)+serve(?:\s|$)", normalized)
@@ -204,6 +289,17 @@ def stop_exact_devspace_service(
     pid = int(identity["pid"])
     if stopper is not None:
         stopper(pid)
+    elif os.name != "nt":
+        path = Path(__file__).resolve().with_name("codexpro_posix_process.py")
+        spec = importlib.util.spec_from_file_location("codexpro_posix_process_stop_runtime", path)
+        if spec is None or spec.loader is None:
+            raise DevSpaceCompatError("DEVSPACE_SERVICE_STOP_FAILED", "POSIX identity module unavailable")
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        try:
+            module.terminate_exact_process(identity)
+        except module.ProcessIdentityError as exc:
+            raise DevSpaceCompatError("DEVSPACE_SERVICE_STOP_FAILED", str(exc), {"pid": pid}) from exc
     else:
         script = (
             f"Stop-Process -Id {pid} -Force -ErrorAction Stop; "
@@ -413,15 +509,27 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--package-root", type=Path)
     parser.add_argument("--confirm-service-restarted", action="store_true")
     parser.add_argument("--stop-exact-service", action="store_true")
+    parser.add_argument("--check-native-runtime", action="store_true")
+    parser.add_argument("--allow-package-absent", action="store_true")
     parser.add_argument("--local-port", type=int, default=7676)
     args = parser.parse_args(argv)
     try:
-        if args.confirm_service_restarted and args.stop_exact_service:
+        selected = sum(bool(value) for value in (
+            args.confirm_service_restarted,
+            args.stop_exact_service,
+            args.check_native_runtime,
+        ))
+        if selected > 1:
             raise DevSpaceCompatError(
                 "DEVSPACE_COMPAT_ACTION_CONFLICT",
                 "choose only one DevSpace compatibility action",
             )
-        if args.confirm_service_restarted:
+        if args.check_native_runtime:
+            result = check_native_runtime(
+                package_root=args.package_root,
+                allow_package_absent=args.allow_package_absent,
+            )
+        elif args.confirm_service_restarted:
             result = confirm_service_restarted(
                 package_root=args.package_root,
                 local_port=args.local_port,

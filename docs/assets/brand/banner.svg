@@ -1,0 +1,37 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 420" role="img" aria-labelledby="title desc">
+  <title id="title">Codex Web GPT Automation</title>
+  <desc id="desc">Guarded and recoverable web ChatGPT execution for local Codex projects.</desc>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop stop-color="#0B1020"/>
+      <stop offset="1" stop-color="#111A35"/>
+    </linearGradient>
+    <pattern id="grid" width="32" height="32" patternUnits="userSpaceOnUse">
+      <path d="M32 0H0v32" fill="none" stroke="#94A3B8" stroke-opacity=".08"/>
+    </pattern>
+  </defs>
+  <rect width="1200" height="420" rx="28" fill="url(#bg)"/>
+  <rect width="1200" height="420" rx="28" fill="url(#grid)"/>
+  <circle cx="1070" cy="70" r="210" fill="#2DD4BF" opacity=".06"/>
+  <circle cx="1000" cy="390" r="260" fill="#8B5CF6" opacity=".08"/>
+  <g transform="translate(72 60) scale(.5859375)">
+    <path fill="#F8FAFC" d="M200 72 80 192v128l120 120 48-48-96-96v-80l96-96-48-48Z"/>
+    <path fill="#2DD4BF" d="m312 72 120 120v128L312 440l-48-48 96-96v-80l-96-96 48-48Z"/>
+    <path fill="none" stroke="#2DD4BF" stroke-linecap="round" stroke-width="18" d="M182 256h42"/>
+    <path fill="none" stroke="#8B5CF6" stroke-linecap="round" stroke-width="18" d="M288 256h42"/>
+    <circle cx="168" cy="256" r="24" fill="#2DD4BF"/>
+    <circle cx="344" cy="256" r="24" fill="#8B5CF6"/>
+    <path fill="#8B5CF6" d="M256 206c8 28 22 42 50 50-28 8-42 22-50 50-8-28-22-42-50-50 28-8 42-22 50-50Z"/>
+  </g>
+  <text x="390" y="150" fill="#F8FAFC" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif" font-size="58" font-weight="760" letter-spacing="-1.7">Codex Web GPT</text>
+  <text x="393" y="211" fill="#CBD5E1" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif" font-size="36" font-weight="560" letter-spacing="6">AUTOMATION</text>
+  <text x="393" y="276" fill="#94A3B8" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif" font-size="23">Guarded, recoverable web ChatGPT execution for local Codex projects.</text>
+  <g transform="translate(393 318)" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif" font-size="15" font-weight="700" letter-spacing="1.4">
+    <rect width="128" height="36" rx="18" fill="#2DD4BF" opacity=".14"/>
+    <text x="64" y="23" fill="#5EEAD4" text-anchor="middle">GUARDED</text>
+    <rect x="142" width="154" height="36" rx="18" fill="#8B5CF6" opacity=".16"/>
+    <text x="219" y="23" fill="#C4B5FD" text-anchor="middle">RECOVERABLE</text>
+    <rect x="310" width="142" height="36" rx="18" fill="#38BDF8" opacity=".13"/>
+    <text x="381" y="23" fill="#7DD3FC" text-anchor="middle">WEB-FIRST</text>
+  </g>
+</svg>

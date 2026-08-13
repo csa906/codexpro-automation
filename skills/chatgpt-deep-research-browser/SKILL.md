@@ -12,7 +12,7 @@ python "$env:USERPROFILE\.codex\bin\chatgpt_oracle_dispatch.py" --mode deep-rese
 ```
 
 The compiled Oracle manifest uses `gpt-5.6`, model strategy `select`, Oracle
-`heavy`, visible `Extra High`, and `--browser-research deep`. It sends no
+`extra-high`, visible `Extra High`, and `--browser-research deep`. It sends no
 attachment and performs no app picker or settings action. Remove `--dry-run`
 only for an explicitly authorized live run.
 

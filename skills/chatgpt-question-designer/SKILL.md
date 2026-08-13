@@ -5,6 +5,21 @@ description: Part of the current Oracle prompt-design path; use before submittin
 
 # ChatGPT Question Designer
 
+## GJC Brownfield Interview Mode
+
+Before a non-trivial implementation whose goal, constraints, success criteria,
+or existing context remain ambiguous, use the installed
+`bin/chatgpt_gjc_interview.py` state machine. Lock one to six top-level
+components in round zero, ask exactly the emitted single question each round,
+and record coverage for only that dimension. Brownfield ambiguity is:
+
+`1 - (0.35 goal + 0.25 constraints + 0.25 success criteria + 0.15 context)`
+
+Contradictory or evasive answers raise ambiguity. At the default 0.35 threshold,
+present the generated one-sentence restatement and require explicit approval.
+Persist and resume the state under `.omo/interviews/`; approval and execution
+remain separate actions.
+
 ## Purpose
 
 Use this skill to give each question the cognitive posture its purpose needs. Construction should remain constructive, research evidence-seeking, synthesis integrative, execution adaptive, and review adversarial.
@@ -45,7 +60,7 @@ Every non-trivial GPT/browser question should include:
 1. `Goal`: what decision or artifact the answer should improve.
 2. `Original task`: preserve the user's request separately from any candidate artifact.
 3. `Cognitive profile`: answer, research, plan, review, edit, orchestrator, synthesis, or an explicit Web Multi role.
-4. `Evidence boundary`: list the live DevSpace workspace scope for regular GPT, exact attachments for Pro, web/source constraints, freshness limits, and what cannot be inspected.
+4. `Evidence boundary`: list the live DevSpace workspace scope for regular GPT and qualified Pro, explicit frozen attachments only for `pro-attachment`, web/source constraints, freshness limits, and what cannot be inspected.
 5. `Action authority`: read-only, bounded workspace write, or mission-owned adaptive execution.
 6. `Confidence discipline`: separate evidence-backed findings, inference, speculation, and unknowns.
 7. `Answer shape`: compact sections; no vague approval; code-shaped output when code-oriented.
@@ -65,14 +80,14 @@ Append an adversarial module only for explicit review/counterexample roles: requ
 Context selection must match the question type.
 
 - New non-Pro direct, plan, review, edit, orchestrator, Deep Research, comprehensive, and Web Multi work uses Oracle plus the manually registered `DevSpace` workspace. The composer receives only `@DevSpace` and the absolute UTF-8 mission path. The mission tells GPT which project files, logs, tests, constraints, and artifacts to inspect through DevSpace.
-- Pro uses Oracle with exact snapshot attachments only. It must not use DevSpace, CodexPro, or another app.
+- Qualified Pro uses Oracle, `GPT-5.6 Sol` at the Pro effort, and read-only DevSpace at the exact project root. It begins with `read('.')` directory-list compatibility and may discover/read decision-relevant evidence broadly and adaptively, but may not write, edit, invoke a shell, or run commands. `pro-attachment` uses exact snapshot attachments only for immutable/external or DevSpace-unreadable evidence; it is never an automatic fallback.
 - CodexPro is frozen for new work. It may appear only while recovering an already persisted legacy agbrowse run; never design a new prompt around CodexPro `tree/search/read`, app registration, app repair, or a CodexPro fallback.
 - Code/design/debug/refactor: give the regular web GPT a narrow project-contained mission and let it inspect the live workspace through DevSpace. Do not duplicate the workspace into attachments or a ZIP.
-- Planning/review: identify the live draft, research, acceptance criteria, local guidance, and known risks by project-relative paths in the mission. Use an attachment packet only for Pro or when the exact immutable snapshot is itself the requested evidence.
+- Planning/review: identify the live draft, research, acceptance criteria, local guidance, and known risks by project-relative paths in the mission. Use an attachment packet only when the exact immutable snapshot is the requested evidence or DevSpace cannot read the artifact.
 - Investigation/source synthesis: identify internal findings and provenance in the DevSpace-visible mission, and use web/search separately for current public facts.
 - Idea expansion: put the seed, constraints, non-goals, audience, and known alternatives in the mission; do not preselect a conclusion.
 
-For a new non-Pro project task, a failed or unavailable DevSpace endpoint blocks submission and routes only to `chatgpt-workspace-setup` diagnosis. It never authorizes CodexPro, ZIP, agbrowse, in-app Browser, Playwright/CDP, or `@chrome` fallback. For Pro, missing exact Oracle attachments blocks submission.
+For a new DevSpace project task, a failed or unavailable endpoint blocks submission and routes only to `chatgpt-workspace-setup` diagnosis. It never authorizes CodexPro, ZIP, agbrowse, in-app Browser, Playwright/CDP, or `@chrome` fallback. `pro-attachment` requires its exact Oracle attachments; qualified Pro does not fall back to it automatically.
 
 ## Oracle Continuity Rules
 

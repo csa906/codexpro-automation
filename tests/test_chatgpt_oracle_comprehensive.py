@@ -40,15 +40,71 @@ def manifest(tmp_path: Path) -> Path:
     return path
 
 
-def test_manifest_rejects_non_devspace_app_before_workflow_creation(tmp_path: Path) -> None:
+def ultra_economy_manifest(tmp_path: Path) -> Path:
+    path = manifest(tmp_path)
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    payload.update({
+        "workflow_profile": "ultra-economy",
+        "initial_stage": "pro",
+    })
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    return path
+
+
+def test_ultra_economy_manifest_rejects_handshake_self_declaration(tmp_path: Path) -> None:
+    module = load()
+    path = ultra_economy_manifest(tmp_path)
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    payload["local_runtime_contract"] = {
+        "model": "gpt-5.6-luna",
+        "reasoning_effort": "max",
+        "source": "current-task-runtime",
+    }
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    with pytest.raises(module.WorkflowError, match="one-time conversational handshake"):
+        module.load_manifest(path)
+
+def test_ultra_economy_dry_run_starts_with_read_only_pro_design(tmp_path: Path, monkeypatch) -> None:
+    module = load()
+    seen: dict[str, object] = {}
+
+    def preview(oracle_manifest: Path, *, dry_run: bool):
+        seen.update(json.loads(oracle_manifest.read_text(encoding="utf-8")))
+        mission = Path(str(seen["mission_path"])).read_text(encoding="utf-8")
+        assert "stage=pro\n" in mission
+        assert "[ULTRA_ECONOMY_DESIGN_CONTRACT]" in mission
+        return {"ok": True}
+
+    result = module.run_workflow(
+        ultra_economy_manifest(tmp_path), dry_run=True, oracle_execute=preview
+    )
+
+    assert result["ok"] is True
+    assert result["stage"] == "pro"
+    assert result["workflow_profile"] == "ultra-economy"
+    assert seen["model"] == "gpt-5.6-sol"
+    assert seen["thinking_time"] == "heavy"
+    assert seen["transport"] == "pro-devspace-readonly"
+
+
+def test_standard_workflow_cannot_skip_plan_with_initial_pro(tmp_path: Path) -> None:
+    module = load()
+    path = manifest(tmp_path)
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    payload["initial_stage"] = "pro"
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    with pytest.raises(module.WorkflowError, match="standard workflow initial_stage must be plan"):
+        module.load_manifest(path)
+
+
+def test_manifest_accepts_configured_workspace_app_before_workflow_creation(tmp_path: Path) -> None:
     module = load()
     path = manifest(tmp_path)
     payload = json.loads(path.read_text(encoding="utf-8"))
     payload["app_name"] = "OtherWorkspace"
     path.write_text(json.dumps(payload), encoding="utf-8")
 
-    with pytest.raises(module.WorkflowError, match="exactly DevSpace"):
-        module.load_manifest(path)
+    assert module.load_manifest(path)["app_name"] == "OtherWorkspace"
 
 
 def test_web_authored_relay_reaches_complete_without_host_semantic_rewrite(tmp_path: Path) -> None:
@@ -59,7 +115,7 @@ def test_web_authored_relay_reaches_complete_without_host_semantic_rewrite(tmp_p
     def fake_execute(path: Path, *, dry_run: bool):
         config = json.loads(path.read_text(encoding="utf-8"))
         assert config["model_strategy"] == "select"
-        assert config["thinking_time"] == "heavy"
+        assert config["thinking_time"] == "extra-high"
         mission = Path(config["mission_path"])
         text = mission.read_text(encoding="utf-8")
         stage = next(item for item in order if f"stage={item}\n" in text)
@@ -127,10 +183,11 @@ def test_pro_stage_runs_oracle_attachment_only_and_materializes_bound_receipt(tm
         stage = next(item for item in ("plan", "pro", "review", "implementation", "final-web-gate") if f"stage={item}\n" in text)
         stages.append(stage)
         if stage == "pro":
-            assert payload["transport"] == "pro-attachment-only"
-            assert payload["model"] == "gpt-5.5-pro"
-            assert payload["attachments"] == [str(mission)]
-            assert "app_name" not in payload
+            assert payload["transport"] == "pro-devspace-readonly"
+            assert payload["task_outcome_contract"] == "v1"
+            assert payload["model"] == "gpt-5.6-sol"
+            assert payload["app_name"] == "DevSpace"
+            assert "attachments" not in payload
             attempt = next(line.split("=", 1)[1] for line in text.splitlines() if line.startswith("attempt_id="))
             input_sha = next(line.split("=", 1)[1] for line in text.splitlines() if line.startswith("input_mission_sha256="))
             oracle_output = mission.parent / "oracle-output.json"
@@ -1460,7 +1517,7 @@ def test_pro_attachment_contract_rejects_outside_project_and_symlink(tmp_path: P
         module._declared_pro_attachments(config, source)
 
 
-def test_regular_manifest_never_attaches_pro_packets_and_legacy_pro_is_mission_only(tmp_path: Path) -> None:
+def test_regular_manifest_never_attaches_pro_packets_and_default_pro_uses_devspace(tmp_path: Path) -> None:
     module = load()
     config = module.load_manifest(manifest(tmp_path))
     config["_parallel_parent_id"] = "b" * 64
@@ -1473,10 +1530,13 @@ def test_regular_manifest_never_attaches_pro_packets_and_legacy_pro_is_mission_o
     ).read_text(encoding="utf-8"))
     assert "attachments" not in regular
     assert regular["transport"] == "devspace"
-    legacy_pro = json.loads(module._oracle_manifest(
+    default_pro = json.loads(module._oracle_manifest(
         config, mission, tmp_path / "legacy-pro", "d" * 32, stage="pro"
     ).read_text(encoding="utf-8"))
-    assert legacy_pro["attachments"] == [str(mission)]
+    assert default_pro["transport"] == "pro-devspace-readonly"
+    assert default_pro["task_outcome_contract"] == "v1"
+    assert default_pro["app_name"] == config["app_name"]
+    assert "attachments" not in default_pro
 
 
 def test_plan_mission_teaches_declared_packet_contract(tmp_path: Path) -> None:

@@ -1,0 +1,20 @@
+{
+  "name": "ventianima-local",
+  "interface": {
+    "displayName": "Ventianima local harnesses"
+  },
+  "plugins": [
+    {
+      "name": "codexpro-harness",
+      "source": {
+        "source": "local",
+        "path": "./plugins/codexpro-harness"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Developer Tools"
+    }
+  ]
+}

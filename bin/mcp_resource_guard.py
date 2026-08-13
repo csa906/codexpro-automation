@@ -5,6 +5,7 @@ import argparse
 import json
 import os
 import re
+import signal
 import subprocess
 import sys
 from dataclasses import dataclass, asdict
@@ -65,6 +66,37 @@ def _run_powershell_json(script: str) -> Any:
 
 
 def list_processes() -> list[Proc]:
+    if os.name != "nt":
+        completed = subprocess.run(
+            ["ps", "-axo", "pid=,ppid=,rss=,%cpu=,lstart=,command="],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=30,
+        )
+        if completed.returncode != 0:
+            raise RuntimeError(completed.stderr.strip() or "ps inventory failed")
+        result: list[Proc] = []
+        for line in completed.stdout.splitlines():
+            parts = line.strip().split(None, 10)
+            if len(parts) < 11:
+                continue
+            try:
+                pid, parent_pid = int(parts[0]), int(parts[1])
+                rss_mb, cpu = float(parts[2]) / 1024.0, float(parts[3])
+                started = datetime.strptime(" ".join(parts[4:9]), "%a %b %d %H:%M:%S %Y").astimezone(timezone.utc)
+            except ValueError:
+                continue
+            command = parts[10]
+            lowered = command.casefold()
+            if "google chrome" in lowered:
+                name = "google chrome"
+            else:
+                name = Path(command.split(None, 1)[0]).name if command else ""
+            result.append(Proc(pid, parent_pid, name, command, round(rss_mb, 1), cpu, started.isoformat()))
+        return result
     script = r"""
 $ErrorActionPreference = 'Stop'
 $cpuRows = @{}
@@ -106,6 +138,23 @@ $rows | ConvertTo-Json -Depth 3
     ]
 
 
+def _elapsed_seconds(value: str) -> float:
+    day_split = value.split("-", 1)
+    days = 0
+    clock = value
+    if len(day_split) == 2:
+        days = int(day_split[0])
+        clock = day_split[1]
+    fields = [int(part) for part in clock.split(":")]
+    if len(fields) == 3:
+        hours, minutes, seconds = fields
+    elif len(fields) == 2:
+        hours, minutes, seconds = 0, fields[0], fields[1]
+    else:
+        hours, minutes, seconds = 0, 0, fields[0]
+    return float(days * 86400 + hours * 3600 + minutes * 60 + seconds)
+
+
 def classify_process(proc: Proc) -> str:
     cmd = proc.command_line.lower()
     name = proc.name.lower()
@@ -127,7 +176,7 @@ def classify_process(proc: Proc) -> str:
         return "chatgpt-runner"
     if "playwright" in cmd and "run-driver" in cmd:
         return "playwright-driver"
-    if name == "chrome.exe":
+    if name in {"chrome.exe", "google chrome"}:
         if "chatgpt-shared\\data\\profile" in cmd or "chatgpt-shared/data/profile" in cmd:
             return "chatgpt-shared-chrome"
         return "chrome"
@@ -334,6 +383,31 @@ def _candidate_still_valid(candidate: dict[str, Any], processes: list[Proc], orp
 
 
 def kill_tree(pid: int) -> dict[str, Any]:
+    if os.name != "nt":
+        processes = list_processes()
+        by_parent: dict[int, list[int]] = {}
+        for process in processes:
+            by_parent.setdefault(process.parent_pid, []).append(process.pid)
+        ordered: list[int] = []
+        def visit(current: int) -> None:
+            for child in by_parent.get(current, []):
+                visit(child)
+            ordered.append(current)
+        visit(pid)
+        errors: list[str] = []
+        for target in ordered:
+            try:
+                os.kill(target, signal.SIGTERM)
+            except ProcessLookupError:
+                continue
+            except OSError as exc:
+                errors.append(f"{target}:{type(exc).__name__}")
+        return {
+            "pid": pid,
+            "returncode": 0 if not errors else 1,
+            "stdout": f"sent SIGTERM to {len(ordered) - len(errors)} exact tree members",
+            "stderr": ",".join(errors),
+        }
     completed = subprocess.run(
         ["taskkill", "/PID", str(pid), "/T", "/F"],
         stdout=subprocess.PIPE,

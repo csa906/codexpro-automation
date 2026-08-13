@@ -1,6 +1,6 @@
 interface:
   display_name: "ChatGPT Oracle Runtime"
-  short_description: "Run regular GPT modes through Oracle and DevSpace"
+  short_description: "Run regular GPT and read-only Pro modes through Oracle and DevSpace"
   default_prompt: "$chatgpt-oracle-runtime C:\\project\\mission.md"
 policy:
   allow_implicit_invocation: false

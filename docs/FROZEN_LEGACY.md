@@ -58,7 +58,7 @@
 | `bin/chatgpt_oracle_state.py` | 프로젝트 잠금·신원·상태 장부 |
 | `bin/chatgpt_oracle_comprehensive.py` | 종합모드 단계 실행기 |
 | `bin/chatgpt_oracle_multi.py` | 진짜 Web Multi-GPT wave 실행 |
-| `bin/chatgpt_oracle_compat.py` | Oracle 0.16.1 해시 검증 호환 패치 |
+| `bin/chatgpt_oracle_compat.py` | Oracle 0.17.1 해시 검증 호환 패치 |
 | `bin/chatgpt_oracle_profiles.py` | lane별 throwaway 프로필 |
 | `bin/chatgpt_oracle_diagnose.py` | 실패 서명 분류 |
 | `bin/chatgpt_oracle_incident.py` | 단일 수리 소유자 인계 패킷 |

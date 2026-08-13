@@ -1,13 +1,14 @@
 ---
 name: chatgpt-oracle-runtime
-description: Current Oracle runtime path for new ChatGPT work: regular modes use the manually registered DevSpace app, Pro is attachment-only, and it includes recovery, comprehensive relay, and genuine multi-session Web Multi-GPT.
+description: "Current Oracle runtime path for new ChatGPT work: regular modes use DevSpace, qualified Pro uses read-only DevSpace, and explicit Pro attachments remain for bounded evidence."
 ---
 
 # ChatGPT Oracle Runtime
 
 This is the only active browser path for all new GPT work. CodexPro and
 agbrowse are frozen for exact legacy recovery only. Regular modes use DevSpace;
-Pro uses Oracle attachment transport without any app.
+qualified Pro uses the same app read-only, while `pro-attachment` uses Oracle
+attachment transport for its explicit evidence boundary.
 
 `chatgpt_oracle_dispatch.py` supports exactly `direct`, `plan`, `review`, `edit`,
 `orchestrator`, `deep-research`, `manual`, and `pro`. `manual` is a supported
@@ -19,10 +20,19 @@ path and a compact exact-workspace guard. The web GPT must use only the exact
 project root recorded in that mission, read the mission and applicable
 `AGENTS.md` completely first, and may retry that same root once after a timeout.
 It must not substitute a parent, child, active workspace, or shell boundary
-workaround. Pro selects the account-visible Pro model and sends one short instruction
-plus exact attachment files; it never mentions DevSpace.
+workaround. Qualified Pro selects `GPT-5.6 Sol` at the Pro effort and uses
+DevSpace read-only at the same exact root. It begins discovery with `read('.')`
+directory-list compatibility and may read decision-relevant material broadly,
+but never writes, edits, invokes shell, or runs commands. Explicit
+`pro-attachment` sends one short instruction plus exact attachment files.
 Regular routes select `GPT-5.6 Sol` with `heavy` and require Oracle
 evidence for visible `Extra High`. Never invent xhigh or silently downgrade.
+
+On the first DevSpace-backed submission for a new project, the runner checks
+exact equality with local DevSpace `allowedRoots` before creating the Oracle
+run directory or browser session. It caches success against the config hash
+and rechecks only after config changes. This is a local root guard, not a
+repeated endpoint/read probe or ChatGPT app/settings inspection.
 
 ## Manifest
 
@@ -31,7 +41,8 @@ Require schema `codex.chatgpt.oracle-run/v1` with:
 - `project_root`: absolute existing directory.
 - `mission_path`: absolute UTF-8 regular file inside the project.
 - `app_name`: one-line app name, without a leading `@`, for regular routes.
-- `task_kind: pro` plus one or more exact `attachments` for Pro.
+- `task_kind: pro`; qualified Pro uses `app_name: DevSpace`, while explicit
+  `pro-attachment` includes one or more exact `attachments`.
 - `mode`: `browser`.
 - Optional `run_root`, `oracle_command`, `oracle_args`, `thinking_time`,
   hash-validated `copy_profile`, and mutex timeout.
@@ -46,7 +57,7 @@ python skills/chatgpt-oracle-runtime/scripts/run_chatgpt_oracle.py run --manifes
 ```
 
 The preview must include final argv, prompt first line, absolute mission path, SHA-256, and artifact paths without launching Oracle or a browser.
-Use this wrapper preview only. Do not substitute Oracle's own browser `--dry-run`, because Oracle 0.16.1 may still enter browser preflight.
+Use this wrapper preview only. Do not substitute Oracle's own browser `--dry-run`, because Oracle 0.17.1 may still enter browser preflight.
 
 Execute only after an explicit live-run request:
 
@@ -59,6 +70,10 @@ and—when `task_outcome_contract` is `v1`—a final
 `TASK_OUTCOME: EXECUTED` marker. `TASK_OUTCOME: NOT_EXECUTED` and
 `TASK_OUTCOME: BLOCKED` preserve terminal transport evidence but return
 attention-required; transport success alone never claims project execution.
+Prompts require citations and Markdown reference definitions before the marker.
+For provider-rendered compatibility, only one exact marker followed solely by
+single-line HTTP(S) Markdown reference definitions is also classifiable; any
+ordinary trailing prose or conflicting marker remains `unknown`.
 A nonzero Oracle exit after launch, including a browser response timeout, is
 `attention_required` rather than proof that the web session failed. It retains
 same-project ownership and permits only exact-slug `live` or `harvest`
@@ -96,9 +111,11 @@ saved-URL recovery evidence does not mechanically prove non-submission. A
 maintenance owner may release that exact run only after explicit user
 confirmation through `chatgpt_oracle_run.py settle-no-submission` with the
 exact run directory, `--confirmation user-confirmed-no-submission`, and a
-concise reason. The settlement is hash-bound to
-project/workflow/stage/attempt/input evidence and does not launch Oracle;
-comprehensive mode may consume only one replacement for that binding.
+concise reason. The settlement is hash-bound to the comprehensive stage,
+direct Web Multi child, or standalone qualified-Pro identity and immutable
+mission evidence and does not launch Oracle. Comprehensive mode may consume
+only one replacement for its binding; standalone qualified Pro permits only
+the separately authorized single fresh retry with identical mission bytes.
 
 Direct same-project runs hold one cross-process mutex for the entire Oracle
 process lifetime. A Multi parent owns that project mutex while authorized

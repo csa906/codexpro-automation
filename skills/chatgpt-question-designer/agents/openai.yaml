@@ -1,4 +1,4 @@
 interface:
   display_name: "ChatGPT Question Designer"
-  short_description: "Design Oracle+DevSpace missions or attachment-only Pro packets."
-  default_prompt: "Design a purpose-specific GPT mission using Oracle+DevSpace for non-Pro or exact attachments for Pro; never route new work through CodexPro."
+  short_description: "Design Oracle+DevSpace missions, including read-only Pro routes."
+  default_prompt: "Design a purpose-specific GPT mission using Oracle+DevSpace; qualified Pro is read-only and `pro-attachment` is only for DevSpace-unreadable immutable evidence. Never route new work through CodexPro."

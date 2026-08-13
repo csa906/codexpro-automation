@@ -3,9 +3,16 @@ from __future__ import annotations
 import argparse
 import importlib.util
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
+
+import pytest
+
+
+if os.name != "nt":
+    pytest.skip("legacy fixed-runtime watchdog is Windows-only", allow_module_level=True)
 
 
 ROOT = Path(__file__).parents[1]

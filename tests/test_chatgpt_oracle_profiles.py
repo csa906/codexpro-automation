@@ -12,6 +12,11 @@ import pytest
 MODULE_PATH = Path(__file__).resolve().parents[1] / "bin" / "chatgpt_oracle_profiles.py"
 
 
+@pytest.fixture(autouse=True)
+def default_workspace_app(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("CODEX_CHATGPT_APP_NAME", "DevSpace")
+
+
 def load_profiles():
     name = "chatgpt_oracle_profiles_test"
     spec = importlib.util.spec_from_file_location(name, MODULE_PATH)
@@ -45,31 +50,34 @@ def test_deep_research_is_only_a_mode_flag() -> None:
     contract = profiles.build_launch_contract("deep_research", mission_path=Path.cwd().resolve() / "mission.md")
     assert contract["research"] is True
     assert contract["reasoning_level"] == "Very High"
+    assert contract["thinking_time"] == "extra-high"
     assert "research_picker" not in contract
     assert "research_app" not in contract
     assert contract["attachments"] == []
 
 
-@pytest.mark.parametrize("level", ["xhigh", "Medium"])
+@pytest.mark.parametrize("level", ["low", "Pro"])
 def test_regular_reasoning_rejects_unsupported_level_without_downgrade(tmp_path: Path, level: str) -> None:
     profiles = load_profiles()
     with pytest.raises(profiles.OracleProfileError) as exc:
         profiles.build_launch_contract("plan", mission_path=(tmp_path / "mission.md").resolve(), reasoning_level=level)
     assert exc.value.code == "REGULAR_REASONING_UNAVAILABLE"
-    assert exc.value.evidence["supported"] == ["Very High", "High"]
+    assert exc.value.evidence["supported"] == ["Very High", "High", "Medium"]
 
 
-def test_pro_is_oracle_attachment_only_and_manual_launches_nothing(tmp_path: Path) -> None:
+def test_pro_attachment_is_oracle_attachment_only_and_manual_launches_nothing(tmp_path: Path) -> None:
     profiles = load_profiles()
     mission = (tmp_path / "prompt.txt").resolve()
     packet = (tmp_path / "packet.zip").resolve()
-    pro = profiles.build_launch_contract("pro", mission_path=mission, attachment_paths=[mission, packet])
+    pro = profiles.build_launch_contract("pro-attachment", mission_path=mission, attachment_paths=[mission, packet])
     manual = profiles.build_launch_contract("manual")
     assert pro["route"] == "oracle-pro-attachment-only"
     assert pro["app_policy"] == "forbidden"
     assert pro["oracle_launch"] is True
     assert pro["devspace_required"] is False
-    assert pro["model"] == "gpt-5.5-pro"
+    assert pro["model"] == "gpt-5.6-sol"
+    assert pro["task_kind"] == "pro"
+    assert pro["thinking_time"] == "heavy"
     assert pro["attachment_policy"] == "always"
     assert pro["attachments"] == [str(mission), str(packet)]
     assert pro["composer_prompt"] == "Read the attached prompt/instructions and all attached files, then complete the task."
@@ -79,14 +87,45 @@ def test_pro_is_oracle_attachment_only_and_manual_launches_nothing(tmp_path: Pat
     assert manual["oracle_launch"] is False
 
 
-def test_pro_includes_mission_once_and_regular_rejects_attachments(tmp_path: Path) -> None:
+def test_regular_ui_effort_contracts_are_distinct_and_accept_korean_labels(tmp_path: Path) -> None:
+    profiles = load_profiles()
+    mission = (tmp_path / "mission.md").resolve()
+    medium = profiles.build_launch_contract("direct", mission_path=mission, reasoning_level="중간")
+    high = profiles.build_launch_contract("direct", mission_path=mission, reasoning_level="높음")
+    very_high = profiles.build_launch_contract("direct", mission_path=mission, reasoning_level="xhigh")
+
+    assert medium["thinking_time"] == "standard"
+    assert high["thinking_time"] == "extended"
+    assert very_high["thinking_time"] == "extra-high"
+
+
+def test_pro_attachment_includes_mission_once_and_regular_rejects_attachments(tmp_path: Path) -> None:
     profiles = load_profiles()
     mission = (tmp_path / "prompt.txt").resolve()
-    pro = profiles.build_launch_contract("pro", mission_path=mission, attachment_paths=[])
+    pro = profiles.build_launch_contract("pro-attachment", mission_path=mission, attachment_paths=[])
     assert pro["attachments"] == [str(mission)]
     with pytest.raises(profiles.OracleProfileError) as exc:
         profiles.build_launch_contract("review", mission_path=mission, attachment_paths=[mission])
     assert exc.value.code == "REGULAR_ATTACHMENTS_FORBIDDEN"
+
+
+@pytest.mark.parametrize("mode", ["pro", "pro-readonly", "pro_readonly"])
+def test_pro_defaults_to_devspace_without_attachments_and_readonly_is_compatible(tmp_path: Path, mode: str) -> None:
+    profiles = load_profiles()
+    mission = (tmp_path / "mission.md").resolve()
+    contract = profiles.build_launch_contract(mode, mission_path=mission)
+
+    assert contract["route"] == "oracle-pro-devspace-readonly"
+    assert contract["app_name"] == "DevSpace"
+    assert contract["model"] == "gpt-5.6-sol"
+    assert contract["model_strategy"] == "select"
+    assert contract["thinking_time"] == "heavy"
+    assert contract["research"] is False
+    assert contract["attachments"] == []
+    assert contract["composer_prompt"].startswith(f"@DevSpace Read the read-only mission file: {mission}.")
+    with pytest.raises(profiles.OracleProfileError) as exc:
+        profiles.build_launch_contract(mode, mission_path=mission, attachment_paths=[mission])
+    assert exc.value.code == "PRO_READONLY_ATTACHMENTS_FORBIDDEN"
 
 
 def test_relative_mission_is_rejected(tmp_path: Path) -> None:

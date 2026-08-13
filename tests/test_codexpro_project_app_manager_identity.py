@@ -1,10 +1,15 @@
 from __future__ import annotations
 
 import json
+import os
 import sys
 from pathlib import Path
 
 import pytest
+
+
+if os.name != "nt":
+    pytest.skip("legacy drive-scoped CodexPro app manager is Windows-only", allow_module_level=True)
 
 BIN = Path(__file__).resolve().parents[1] / "bin"
 sys.path.insert(0, str(BIN))

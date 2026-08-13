@@ -1,0 +1,33 @@
+diff --git a/dist/src/cli/browserTabs.js b/dist/src/cli/browserTabs.js
+--- a/dist/src/cli/browserTabs.js
++++ b/dist/src/cli/browserTabs.js
+@@ -8,3 +8,12 @@ import { resolveOutputPath } from "./writeOutputPath.js";
+ const LIVE_POLL_MS = 2000;
+ const DEFAULT_STALL_THRESHOLD_MS = 60_000;
++function liveTerminalTimeoutMs() {
++    const configured = Number(process.env.ORACLE_LIVE_TERMINAL_TIMEOUT_MS ?? "0");
++    return Number.isFinite(configured) && configured > 0 ? configured : 0;
++}
++
++function liveTerminalDeadlineMs(timeoutMs) {
++    return timeoutMs > 0 ? Date.now() + timeoutMs : 0;
++}
++
+ function isRecoverableMissingTabError(message) {
+@@ -237,4 +246,6 @@ export async function liveTailSessionBrowserOutput(sessionId, options = {}) {
+     let recoveredChrome = null;
+     const stallThresholdMs = options.stallThresholdMs ?? DEFAULT_STALL_THRESHOLD_MS;
++    const terminalDeadlineMs = liveTerminalDeadlineMs(liveTerminalTimeoutMs());
++    const holdRecoveredConnection = terminalDeadlineMs > 0;
+     let lastHash = null;
+     let unchangedSince = Date.now();
+@@ -293,5 +304,9 @@ export async function liveTailSessionBrowserOutput(sessionId, options = {}) {
+                : harvested.authenticated
+                    ? "completed"
+                    : "detached";
++            if (derivedState === "stalled" && holdRecoveredConnection && Date.now() < terminalDeadlineMs) {
++                await new Promise((resolve) => setTimeout(resolve, LIVE_POLL_MS));
++                continue;
++            }
+             if (derivedState === "completed" ||
+                 derivedState === "stalled" ||

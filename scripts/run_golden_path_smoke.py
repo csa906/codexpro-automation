@@ -71,7 +71,7 @@ def run_smoke(*, bin_root: Path) -> dict[str, Any]:
 
         config = state.load_manifest(manifest_path)
         record("manifest_loads", True, {"transport": config.transport, "app_name": config.app_name})
-        record("devspace_transport_selected", config.transport == "devspace" and config.app_name == "DevSpace")
+        record("devspace_transport_selected", config.transport == "devspace" and bool(config.app_name))
 
         prompt = state.composer_prompt(config) if hasattr(state, "composer_prompt") else None
         if prompt is None:
@@ -79,7 +79,7 @@ def run_smoke(*, bin_root: Path) -> dict[str, Any]:
             prompt = f"@{payload['app_name']} {payload['mission_path']}"
         record(
             "prompt_is_one_line_with_app_mention",
-            "\n" not in prompt and "@DevSpace" in prompt and str(mission.resolve()) in prompt,
+            "\n" not in prompt and f"@{config.app_name}" in prompt and str(mission.resolve()) in prompt,
         )
 
         preview = runner.execute_run(manifest_path, dry_run=True)
@@ -88,7 +88,7 @@ def run_smoke(*, bin_root: Path) -> dict[str, Any]:
         record("argv_never_submits_files", "--file" not in argv)
         record("argv_hides_browser_window", argv.count("--browser-hide-window") == 1)
         record("argv_selects_a_model", "--model" in argv and "--browser-model-strategy" in argv)
-        record("argv_requests_heavy_thinking", "heavy" in argv)
+        record("argv_requests_extra_high_thinking", "extra-high" in argv)
         profile_copy_supported = state.profile_copy_is_supported()
         record(
             "profile_copy_matches_host_capability",

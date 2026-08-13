@@ -41,6 +41,9 @@ const REFINER_CONCURRENCY = SUB_GPT_CONCURRENCY;
 const MERGER_CONCURRENCY = SUB_GPT_CONCURRENCY;
 const CODEX_TIMEOUT_MS = 30 * 60 * 1000;
 function resolveCodexCommand() {
+  for (const explicit of [process.env.MULTI_GPT_CODEX_CLI_PATH, process.env.CODEX_CLI_PATH]) {
+    if (explicit && existsSync(explicit)) return explicit;
+  }
   if (process.platform !== 'win32') return 'codex';
   // OpenCodex installs codex.cmd as an autostart shim. Running that shim once per
   // parallel stage launches concurrent `ensure` processes and can serialize or stall
@@ -845,7 +848,7 @@ async function codexMar(args, controller) {
 
   throwIfCanceled(controller);
   const planner = await runPlanner(options.prompt, fileContext, options, trace, controller);
-  if (!planner.success) return { ok: false, stage: 'Planner', error: planner.error, raw: planner.raw, metadata: metadata(options, fileSummaries, trace) };
+  if (!planner.success) return { ok: false, stage: 'Planner', error: planner.error, raw: planner.raw, stderr: planner.stderr || '', metadata: metadata(options, fileSummaries, trace) };
 
   const solved = await runSolvers(options.prompt, fileContext, planner.problemAnalysis, planner.approaches, options, trace, controller);
   if (!solved.success) return { ok: false, stage: 'Solver', error: solved.error, failures: solved.failures, metadata: metadata(options, fileSummaries, trace) };

@@ -8,6 +8,7 @@ import os
 import re
 import shutil
 import stat
+import subprocess
 import sys
 import time
 import uuid
@@ -667,10 +668,23 @@ def process_identity(pid: int | None = None) -> dict[str, Any]:
             return {"pid": selected, "creation_time": None, "alive": False}
 
     try:
-        os.kill(selected, 0)
-        alive = True
-    except Exception:
-        alive = False
+        completed = subprocess.run(
+            ["ps", "-o", "lstart=", "-p", str(selected)],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+        value = completed.stdout.strip()
+        alive = completed.returncode == 0 and bool(value)
+        if alive:
+            creation_time = datetime.strptime(value, "%a %b %d %H:%M:%S %Y").astimezone().timestamp()
+    except (OSError, subprocess.SubprocessError, ValueError):
+        try:
+            os.kill(selected, 0)
+            alive = True
+        except OSError:
+            alive = False
     return {"pid": selected, "creation_time": creation_time, "alive": alive}
 
 

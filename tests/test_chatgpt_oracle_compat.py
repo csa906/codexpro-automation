@@ -3,10 +3,13 @@ from __future__ import annotations
 import hashlib
 import importlib.util
 import json
+import shutil
+import subprocess
 import sys
 from pathlib import Path
 
 import pytest
+
 
 MODULE_PATH = Path(__file__).resolve().parents[1] / "bin" / "chatgpt_oracle_compat.py"
 
@@ -29,35 +32,65 @@ def test_exact_version_patch_is_hash_gated_idempotent_and_backed_up(tmp_path: Pa
     compat = load_compat()
     package = tmp_path / "package"
     package.mkdir()
-    (package / "package.json").write_text(json.dumps({"version": "0.16.1"}), encoding="utf-8")
+    (package / "package.json").write_text(json.dumps({"version": "0.17.1"}), encoding="utf-8")
     target = package / "sample.txt"
     target.write_bytes(b"before\n")
     patches = tmp_path / "patches"
     patches.mkdir()
     (patches / "sample.patch").write_text(
-        "diff --git a/sample.txt b/sample.txt\n"
-        "--- a/sample.txt\n"
-        "+++ b/sample.txt\n"
-        "@@ -1 +1 @@\n"
-        "-before\n"
-        "+after\n",
+        "diff --git a/sample.txt b/sample.txt\n--- a/sample.txt\n+++ b/sample.txt\n@@ -1 +1 @@\n-before\n+after\n",
         encoding="utf-8",
     )
+    compat.PATCHES = {"sample.txt": {"patch": "sample.patch", "pristine": digest(b"before\n"), "patched": digest(b"after\n")}}
+    compat.patch_root = lambda: patches
+    backup = tmp_path / "backup"
+
+    first = compat.ensure_oracle_compatibility("oracle 0.17.1", package_root=package, backup_root=backup)
+    second = compat.ensure_oracle_compatibility("oracle 0.17.1", package_root=package, backup_root=backup)
+
+    assert first["changed"] == ["sample.txt"]
+    assert second["already_patched"] == ["sample.txt"]
+    assert target.read_bytes() == b"after\n"
+    assert (backup / "sample.txt").read_bytes() == b"before\n"
+
+
+def test_hash_specific_legacy_patch_migrates_without_backup(tmp_path: Path) -> None:
+    compat = load_compat()
+    package = tmp_path / "package"
+    package.mkdir()
+    (package / "package.json").write_text(json.dumps({"version": "0.17.1"}), encoding="utf-8")
+    target = package / "sample.txt"
+    target.write_bytes(b"middle\n")
+    patches = tmp_path / "patches"
+    patches.mkdir()
+    (patches / "sample.patch").write_text(
+        "diff --git a/sample.txt b/sample.txt\n--- a/sample.txt\n+++ b/sample.txt\n@@ -1 +1 @@\n-before\n+after\n",
+        encoding="utf-8",
+    )
+    (patches / "legacy.patch").write_text(
+        "diff --git a/sample.txt b/sample.txt\n--- a/sample.txt\n+++ b/sample.txt\n@@ -1 +1 @@\n-before\n+middle\n",
+        encoding="utf-8",
+    )
+    legacy_hash = digest(b"middle\n")
     compat.PATCHES = {
         "sample.txt": {
             "patch": "sample.patch",
             "pristine": digest(b"before\n"),
             "patched": digest(b"after\n"),
+            "legacy_patched": [legacy_hash],
+            "legacy_patches": {legacy_hash: "legacy.patch"},
         }
     }
     compat.patch_root = lambda: patches
     backup = tmp_path / "backup"
 
-    first = compat.ensure_oracle_compatibility("oracle 0.16.1", package_root=package, backup_root=backup)
-    second = compat.ensure_oracle_compatibility("oracle 0.16.1", package_root=package, backup_root=backup)
+    result = compat.ensure_oracle_compatibility(
+        "oracle 0.17.1",
+        package_root=package,
+        backup_root=backup,
+    )
 
-    assert first["changed"] == ["sample.txt"]
-    assert second["already_patched"] == ["sample.txt"]
+    assert result["changed"] == ["sample.txt"]
     assert target.read_bytes() == b"after\n"
     assert (backup / "sample.txt").read_bytes() == b"before\n"
 
@@ -70,188 +103,240 @@ def test_unknown_oracle_version_or_file_hash_fails_closed(tmp_path: Path) -> Non
 
     package = tmp_path / "package"
     package.mkdir()
-    (package / "package.json").write_text(json.dumps({"version": "0.16.1"}), encoding="utf-8")
+    (package / "package.json").write_text(json.dumps({"version": "0.17.1"}), encoding="utf-8")
     (package / "sample.txt").write_bytes(b"unknown\n")
-    compat.PATCHES = {
-        "sample.txt": {
-            "patch": "sample.patch",
-            "pristine": digest(b"before\n"),
-            "patched": digest(b"after\n"),
-        }
-    }
+    compat.PATCHES = {"sample.txt": {"patch": "missing.patch", "pristine": digest(b"before\n"), "patched": digest(b"after\n")}}
     with pytest.raises(compat.OracleCompatError) as mismatch:
-        compat.ensure_oracle_compatibility("oracle 0.16.1", package_root=package)
+        compat.ensure_oracle_compatibility("oracle 0.17.1", package_root=package)
     assert mismatch.value.code == "ORACLE_FILE_HASH_MISMATCH"
 
 
-def test_all_matching_npx_cache_roots_are_patched_and_legacy_is_migrated(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_published_0171_patch_requires_extra_high_and_pro_selection_proof(tmp_path: Path) -> None:
     compat = load_compat()
-    roots = [tmp_path / "cache-new", tmp_path / "cache-old"]
-    for root in roots:
-        root.mkdir()
-        (root / "package.json").write_text(json.dumps({"version": "0.16.1"}), encoding="utf-8")
-    (roots[0] / "sample.txt").write_bytes(b"before\n")
-    (roots[1] / "sample.txt").write_bytes(b"legacy\n")
-    patches = tmp_path / "patches"
-    patches.mkdir()
-    (patches / "sample.patch").write_text(
-        "diff --git a/sample.txt b/sample.txt\n"
-        "--- a/sample.txt\n"
-        "+++ b/sample.txt\n"
-        "@@ -1 +1 @@\n"
-        "-before\n"
-        "+after\n",
+    source = (
+        Path.home()
+        / "AppData"
+        / "Local"
+        / "npm-cache"
+        / "_npx"
+        / "0a10f56e3ba43148"
+        / "node_modules"
+        / "@steipete"
+        / "oracle"
+    )
+    if not source.is_dir():
+        pytest.skip("published Oracle 0.17.1 cache is unavailable")
+    package = tmp_path / "oracle"
+    shutil.copytree(source, package)
+    backup = tmp_path / "backup"
+
+    result = compat.ensure_oracle_compatibility("oracle 0.17.1", package_root=package, backup_root=backup)
+    touched = set(result["changed"]) | set(result["already_patched"])
+    assert set(compat.PATCHES) <= touched
+    node = shutil.which("node")
+    assert node is not None, "Node.js is required to validate the patched Oracle source"
+    recovery_target = package / "dist/src/browser/recoverConversation.js"
+    recovery_text = recovery_target.read_text(encoding="utf-8")
+    assert "copyProfileSource" in recovery_text
+    assert "launching an isolated profile copy" in recovery_text
+    assert "wrapEphemeralRecoveryChrome" in recovery_text
+    assert 'return copyProfileSource.trim();' in recovery_text
+    assert 'const chromeProfile = await copyChromeProfile(profileSource, userDataDir, config.chromeProfile);' in recovery_text
+    recovery_syntax = subprocess.run(
+        [node, "--check", str(recovery_target)],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert recovery_syntax.returncode == 0, recovery_syntax.stderr
+    assert compat.sha256_file(recovery_target) == compat.PATCHES["dist/src/browser/recoverConversation.js"]["patched"]
+    target = package / "dist/src/browser/actions/thinkingTime.js"
+    source_text = target.read_text(encoding="utf-8")
+    assert "strictGpt56Effort" in source_text
+    assert 'level === "extra-high" || level === "heavy"' in source_text
+    assert "strictRequestedEffort" in source_text
+    assert "composer-model-picker-slider-simple-view" in source_text
+    assert ").find(isVisible) ?? null" in source_text
+    assert "label: 'Power ' + current + ' of 5'" in source_text
+    assert "`Power ${current} of 5`" not in source_text
+    assert "const compact = Array.from(text)" in source_text
+    assert "compact.includes(String(candidate) + 'of5')" in source_text
+    assert "targetPower: POWER_TARGET" in source_text
+    assert "exactGpt56ProProof" in source_text
+    assert "composer-model-picker-slider-advanced-view" in source_text
+    assert "compact.includes('modelgpt56sol') && compact.includes('effortpro')" in source_text
+    syntax = subprocess.run(
+        [node, "--check", str(target)],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert syntax.returncode == 0, syntax.stderr
+    assert compat.sha256_file(target) == compat.PATCHES["dist/src/browser/actions/thinkingTime.js"]["patched"]
+    slider_script = (
+        f"import {{ ensureThinkingTime }} from {json.dumps(target.as_uri())};"
+        "const hiddenView={textContent:'',querySelector:()=>null,"
+        "getAttribute:(name)=>name==='aria-hidden'?'true':null,"
+        "getBoundingClientRect:()=>({width:0,height:0}),focus:()=>{},dispatchEvent:()=>true};"
+        "const view={textContent:'Pro,\\u200b 5\\u00a0of\\u202f5.Use Left and Right arrow keys to adjust power.',"
+        "querySelector:()=>null,getAttribute:()=>null,getBoundingClientRect:()=>({width:224,height:40}),"
+        "focus:()=>{},dispatchEvent:()=>true};"
+        "globalThis.document={querySelector:()=>null,querySelectorAll:(selector)=>selector.includes("
+        "'composer-model-picker-slider-simple-view')?[hiddenView,view]:[],dispatchEvent:()=>true,body:{}};"
+        "globalThis.KeyboardEvent=class{constructor(type,init){this.type=type;Object.assign(this,init)}};"
+        "globalThis.HTMLElement=class{};"
+        "const logs=[];"
+        "const Runtime={evaluate:async({expression})=>{const value=await eval(expression);"
+        "return {result:{value}};}};"
+        "await ensureThinkingTime(Runtime,'heavy',(message)=>logs.push(message),'gpt-5.6-sol');"
+        "console.log(JSON.stringify(logs));"
+    )
+    slider = subprocess.run(
+        [node, "--input-type=module", "-e", slider_script],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert slider.returncode == 0, slider.stderr
+    assert json.loads(slider.stdout) == ["[browser] Thinking time: Power 5 of 5 (already selected)"]
+
+    exact_diagnostic_script = (
+        f"import {{ ensureThinkingTime }} from {json.dumps(target.as_uri())};"
+        "let menuOpen=false;"
+        "let advancedQueries=0;"
+        "const hiddenView={textContent:'Pro, 5 of 5.Use Left and Right arrow keys to adjust power.',"
+        "querySelector:()=>null,getAttribute:(name)=>name==='aria-hidden'?'true':null,"
+        "getBoundingClientRect:()=>({width:0,height:0}),focus:()=>{},dispatchEvent:()=>true};"
+        "const view={textContent:'Pro, 5 of 5.Use Left and Right arrow keys to adjust power.',"
+        "querySelector:()=>({getAttribute:(name)=>name==='aria-valuenow'?'4':null}),"
+        "getAttribute:()=>null,getBoundingClientRect:()=>({width:224,height:40}),"
+        "focus:()=>{},dispatchEvent:()=>true};"
+        "const intelligenceMenu={textContent:'Pro, 5 of 5.AdvancedFasterSmarterM',"
+        "querySelector:()=>null,querySelectorAll:(selector)=>selector.includes("
+        "'composer-model-picker-slider-simple-view')?[hiddenView,view]:selector.includes("
+        "'composer-model-picker-slider-advanced-view')&&++advancedQueries>=3?"
+        "[hiddenAdvanced,advanced]:[],getAttribute:()=>null,"
+        "getBoundingClientRect:()=>({width:320,height:240})};"
+        "const hiddenAdvanced={textContent:'ModelGPT-5.6 SolEffortPro',querySelector:()=>null,"
+        "querySelectorAll:()=>[],getAttribute:(name)=>name==='aria-hidden'?'true':null,"
+        "getBoundingClientRect:()=>({width:0,height:0})};"
+        "const advanced={textContent:'ModelGPT-5.6 SolEffortPro',"
+        "querySelector:()=>null,"
+        "querySelectorAll:()=>[],getAttribute:()=>null,"
+        "getBoundingClientRect:()=>({width:320,height:240})};"
+        "const modelButton=new class extends EventTarget{"
+        "get textContent(){return menuOpen?'Pro':'Extra High'}"
+        "querySelector(){return null}matches(){return true}get isConnected(){return true}"
+        "getAttribute(name){if(name==='aria-expanded')return menuOpen?'true':'false';return null}"
+        "getBoundingClientRect(){return {width:120,height:36}}focus(){}"
+        "dispatchEvent(){menuOpen=true;return true}};"
+        "globalThis.window=globalThis;"
+        "globalThis.MouseEvent=class{constructor(type,init){this.type=type;Object.assign(this,init)}};"
+        "globalThis.document={querySelector:(selector)=>selector.includes("
+        "'composer-intelligence-picker-content')?(menuOpen?intelligenceMenu:null):(selector.includes("
+        "'model-switcher-dropdown-button')||selector.includes('__composer-pill'))?modelButton:null,"
+        "querySelectorAll:(selector)=>selector.includes('composer-model-picker-slider-simple-view')?"
+        "(menuOpen?[hiddenView]:[]):selector.includes('composer-model-picker-slider-advanced-view')?"
+        "[]:(selector.includes('[role=\"menu\"]')?"
+        "(menuOpen?[intelligenceMenu]:[]):[]),dispatchEvent:()=>true,body:{}};"
+        "globalThis.KeyboardEvent=class{constructor(type,init){this.type=type;Object.assign(this,init)}};"
+        "globalThis.HTMLElement=class{};"
+        "const logs=[];"
+        "const Runtime={evaluate:async({expression})=>{const value=await eval(expression);"
+        "return {result:{value}};}};"
+        "await ensureThinkingTime(Runtime,'heavy',(message)=>logs.push(message));"
+        "console.log(JSON.stringify({logs,advancedQueries}));"
+    )
+    exact_diagnostic = subprocess.run(
+        [node, "--input-type=module", "-e", exact_diagnostic_script],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert exact_diagnostic.returncode == 0, exact_diagnostic.stderr
+    exact_payload = json.loads(exact_diagnostic.stdout)
+    assert exact_payload["advancedQueries"] >= 4
+    assert exact_payload["logs"] == [
+        "[browser] Thinking time: Power 5 of 5 (Pro) (already selected)"
+    ]
+
+    browser_config = package / "dist/src/browser/config.js"
+    browser_config_text = browser_config.read_text(encoding="utf-8")
+    assert "config?.copyProfileSource" in browser_config_text
+    assert compat.sha256_file(browser_config) == compat.PATCHES["dist/src/browser/config.js"]["patched"]
+    config_syntax = subprocess.run(
+        [node, "--check", str(browser_config)],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert config_syntax.returncode == 0, config_syntax.stderr
+    behavior = subprocess.run(
+        [
+            node,
+            "--input-type=module",
+            "-e",
+            (
+                f"import {{ resolveBrowserConfig }} from {json.dumps(browser_config.as_uri())}; "
+                "console.log(JSON.stringify({"
+                "copied:resolveBrowserConfig({copyProfileSource:'signed'}).manualLogin,"
+                "explicit:resolveBrowserConfig({copyProfileSource:'signed',manualLogin:true}).manualLogin"
+                "}));"
+            ),
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert behavior.returncode == 0, behavior.stderr
+    assert json.loads(behavior.stdout) == {"copied": False, "explicit": True}
+
+    profile_copy = package / "dist/src/browser/profileCopy.js"
+    profile_copy_text = profile_copy.read_text(encoding="utf-8")
+    assert 'process.platform === "win32"' in profile_copy_text
+    assert "recursive: true" in profile_copy_text
+    assert compat.sha256_file(profile_copy) == compat.PATCHES["dist/src/browser/profileCopy.js"]["patched"]
+    profile_syntax = subprocess.run(
+        [node, "--check", str(profile_copy)],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert profile_syntax.returncode == 0, profile_syntax.stderr
+
+    source_profile = tmp_path / "source-profile"
+    (source_profile / "Default/Network").mkdir(parents=True)
+    (source_profile / "Default/Cache").mkdir(parents=True)
+    (source_profile / "Default/Service Worker/CacheStorage").mkdir(parents=True)
+    (source_profile / "Local State").write_text(
+        json.dumps({"profile": {"last_used": "Default"}}),
         encoding="utf-8",
     )
-    compat.PATCHES = {
-        "sample.txt": {
-            "patch": "sample.patch",
-            "pristine": digest(b"before\n"),
-            "patched": digest(b"after\n"),
-            "legacy_patched": [digest(b"legacy\n")],
-        }
-    }
-    compat.patch_root = lambda: patches
-    monkeypatch.setattr(compat, "_candidate_roots", lambda: roots)
-    backup = tmp_path / "backup"
-    backup.mkdir()
-    (backup / "sample.txt").write_bytes(b"before\n")
+    (source_profile / "Default/Network/Cookies").write_text("signed-session", encoding="utf-8")
+    (source_profile / "Default/Cache/ignored").write_text("cache", encoding="utf-8")
+    (source_profile / "Default/Service Worker/CacheStorage/ignored").write_text("cache", encoding="utf-8")
+    copied_profile = tmp_path / "copied-profile"
+    copy_result = subprocess.run(
+        [
+            node,
+            "--input-type=module",
+            "-e",
+            (
+                f"import {{ copyChromeProfile }} from {json.dumps(profile_copy.as_uri())}; "
+                f"const selected = await copyChromeProfile({json.dumps(str(source_profile))}, "
+                f"{json.dumps(str(copied_profile))}); console.log(selected);"
+            ),
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert copy_result.returncode == 0, copy_result.stderr
+    assert copy_result.stdout.strip() == "Default"
+    assert (copied_profile / "Local State").is_file()
+    assert (copied_profile / "Default/Network/Cookies").read_text(encoding="utf-8") == "signed-session"
+    assert not (copied_profile / "Default/Cache").exists()
+    assert not (copied_profile / "Default/Service Worker/CacheStorage").exists()
 
-    result = compat.ensure_oracle_compatibility("oracle 0.16.1", backup_root=backup)
-
-    assert result["package_roots"] == [str(root) for root in roots]
-    assert all((root / "sample.txt").read_bytes() == b"after\n" for root in roots)
-    assert len(result["changed"]) == 2
-
-
-def test_prompt_composer_app_pill_probe_uses_the_composer_form_scope() -> None:
-    patch = (
-        MODULE_PATH.parent
-        / "oracle-compat"
-        / "0.16.1"
-        / "promptComposer.patch"
-    ).read_text(encoding="utf-8")
-
-    assert "root.closest('form') || root.parentElement || root" in patch
-    assert "scope.querySelectorAll(" in patch
-    assert "target.click();" in patch
-    assert "group.querySelectorAll('*')" in patch
-    assert "if (pill) return true;" in patch
-    assert "return !Array.from(document.querySelectorAll(" in patch
-    assert "App mention confirmation diagnostic:" in patch
-    assert 'logDomFailure(runtime, logger, "app-mention-pill-missing")' in patch
-    assert "diagnostic.result?.value ?? null" in patch
-    assert "__oracleAppApprovalWatcher" in patch
-    assert "이 대화에 기억" in patch
-    assert "remember for this chat" in patch
-    assert "allowLabels.has" in patch
-
-
-def test_app_mention_ui_observation_is_a_warning_not_a_hard_block() -> None:
-    patch = (
-        MODULE_PATH.parent
-        / "oracle-compat"
-        / "0.16.1"
-        / "promptComposer.patch"
-    ).read_text(encoding="utf-8")
-
-    # The app is routed by the literal @name text in the submitted prompt, so an
-    # unobservable suggestion overlay or pill must not fail the run.
-    for removed in (
-        'BrowserAutomationError("ChatGPT app mention suggestion did not appear."',
-        'BrowserAutomationError("Exact ChatGPT app suggestion could not be clicked."',
-        "BrowserAutomationError(`ChatGPT app mention was not confirmed in the composer",
-    ):
-        assert removed not in patch
-
-    assert "let mentionUiConfirmed = true;" in patch
-    assert patch.count("mentionUiConfirmed = false;") == 3
-    assert "was sent as literal text without UI confirmation" in patch
-    assert "confirmed in the composer.`" in patch
-
-
-def test_model_selection_verifies_the_family_row_and_defers_effort_to_thinking_time() -> None:
-    patch = (
-        MODULE_PATH.parent
-        / "oracle-compat"
-        / "0.16.1"
-        / "modelSelection.patch"
-    ).read_text(encoding="utf-8")
-
-    # The 2026 picker exposes "GPT-5.6 Sol" as a family row whose children are
-    # the selectable Medium/High/Extra High effort rows.  Requiring an exact
-    # selectable label named after the model made every run fail before the
-    # composer, so the family row now verifies the model and the separate
-    # thinking-time step chooses the effort tier.
-    assert "matchedVisibleSolFamily" in patch
-    assert "versionFromLabel(match.normalizedText) === desiredVersion" in patch
-    assert "aria-haspopup" in patch
-    assert "resolve({ status: 'already-selected', label: match.label })" in patch
-    assert "Medium/High/Extra High" in patch
-
-
-def test_copy_profile_recovery_patch_reuses_only_the_persisted_profile_seed() -> None:
-    compat = load_compat()
-    contract = compat.PATCHES["dist/src/browser/recoverConversation.js"]
-    patch = (
-        MODULE_PATH.parent
-        / "oracle-compat"
-        / "0.16.1"
-        / contract["patch"]
-    ).read_text(encoding="utf-8")
-
-    assert "resolved.copyProfileSource" in patch
-    assert "return copyProfileSource.trim();" in patch
-    assert 'mkdtemp(path.join(os.tmpdir(), "oracle-recovery-"))' in patch
-    assert "wrapEphemeralRecoveryChrome" in patch
-    assert contract["pristine"] == "8c7d841bc078af20c8922ec435f62e00df7a40605583fbd89334696b3ddb386b"
-    assert contract["patched"] == "650ffe9bdbbaf799510e8cacaa8ba8407322bbbb175e790a3cf7777fa14772fe"
-
-
-def test_hidden_window_patch_supports_windows_without_headless_mode() -> None:
-    compat = load_compat()
-    contract = compat.PATCHES["dist/src/browser/chromeLifecycle.js"]
-    patch = (
-        MODULE_PATH.parent
-        / "oracle-compat"
-        / "0.16.1"
-        / contract["patch"]
-    ).read_text(encoding="utf-8")
-
-    assert 'process.platform === "win32"' in patch
-    assert "--window-position=-32000,-32000" in patch
-    assert contract["pristine"] == "9eaffd8264051266581548ea9dbee1152bd94b7a6032ed0441b1ba3c11c5b5e9"
-    assert contract["patched"] == "d852372c9c16c9a130a280001e62312542092b0c38397907897217f8af0c559d"
-
-
-def test_browser_timeout_compat_patches_consume_one_overall_budget() -> None:
-    compat = load_compat()
-    index_contract = compat.PATCHES["dist/src/browser/index.js"]
-    index_patch = (
-        Path(compat.__file__).resolve().parent
-        / "oracle-compat"
-        / "0.16.1"
-        / index_contract["patch"]
-    ).read_text(encoding="utf-8")
-    response_contract = compat.PATCHES["dist/src/browser/actions/assistantResponse.js"]
-    response_patch = (
-        Path(compat.__file__).resolve().parent
-        / "oracle-compat"
-        / "0.16.1"
-        / response_contract["patch"]
-    ).read_text(encoding="utf-8")
-
-    assert "const startedAt = Date.now();" in index_patch
-    assert "timeoutMs - (Date.now() - startedAt)" in index_patch
-    assert "waitForAssistantResponse(Runtime, remainingMs" in index_patch
-    assert index_patch.count("timeoutMs - (Date.now() - startedAt)") == 2
-    assert index_patch.index("await delay(1000)") < index_patch.rindex(
-        "timeoutMs - (Date.now() - startedAt)"
-    ) < index_patch.index("waitForAssistantResponse(Runtime, remainingMs")
-    assert "recoverAssistantResponse(Runtime, remainingMs" in response_patch
-    assert "\n+                const recovered = await recoverAssistantResponse(Runtime, timeoutMs" not in response_patch
-    assert index_contract["patched"] == "5f7bc607dae4667ad860d2aa125c138c053190e33f206237c24f5c6aab4bf14c"
-    assert "9168df2b3e8c4d1c962d05b198ceab1a9df9e50c7573453673212905e2bc5eba" in index_contract["legacy_patched"]
-    assert response_contract["patched"] == "18661304c7fb545bc327876d38045818cbd23257488137836d43661be8742af4"
+    second = compat.ensure_oracle_compatibility("oracle 0.17.1", package_root=package, backup_root=backup)
+    assert set(second["already_patched"]) == set(compat.PATCHES)

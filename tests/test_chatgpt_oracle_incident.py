@@ -51,13 +51,13 @@ def write_run(
         "project_root": str(project_root),
         "session_authority": session_authority,
         "terminal_harvested": terminal_harvested,
-        "attachments": attachments or [],
+    "attachments": attachments or [],
         "artifacts": {
             "output": str(output_path),
             "stdout": str(stdout_path),
             "stderr": str(stderr_path),
-        },
-        "oracle": {"slug": "oracle-project-abc", "conversation_url": conversation_url},
+    },
+    "oracle": {"slug": "oracle-project-abc", "conversation_url": conversation_url},
     }), encoding="utf-8")
     return run_dir
 
@@ -82,29 +82,63 @@ def test_packet_carries_exact_run_bucket_and_evidence(tmp_path: Path) -> None:
     assert str(run_dir / "state.json") in packet["evidence_paths"]
 
 
-def test_packet_marks_oversized_attachment_preflight_as_safe_no_submission(tmp_path: Path) -> None:
+def test_version_resolution_prelaunch_incident_is_safe_to_retry(tmp_path: Path) -> None:
     module = load()
-    run_dir = write_run(
-        tmp_path,
-        "oversized",
-        status="attention_required",
-        stdout="oracle 0.16.1\n",
-        stderr="The following files exceed the 1 MB limit:\n- packet.zip (7.2 MB)\n",
-        session_authority="submitted_unknown",
-        attachments=[{
-            "path": str(tmp_path / "packet.zip"),
-            "sha256": "a" * 64,
-            "size_bytes": 1024 * 1024 + 1,
-        }],
-        conversation_url="",
+    run_dir = write_run(tmp_path, "v" * 8, status="attention_required")
+    state_path = run_dir / "state.json"
+    state = json.loads(state_path.read_text(encoding="utf-8"))
+    state["pre_submit_failure"] = {
+        "code": "ORACLE_VERSION_RESOLUTION_PRELAUNCH_FAILED",
+        "output_absent": True,
+        "conversation_url_absent": True,
+    }
+    state_path.write_text(json.dumps(state), encoding="utf-8")
+
+    packet = module.build_packet(run_dir)
+
+    assert packet["bucket"] == "pre-submit-host-environment"
+    assert packet["signature"] == "oracle-version-resolution-prelaunch-timeout"
+    assert packet["safe_for_fresh_run"] is True
+
+
+def test_model_switcher_pre_submit_incident_is_safe_to_retry(tmp_path: Path) -> None:
+    module = load()
+    run_dir = write_run(tmp_path, "m" * 8, status="attention_required")
+    state_path = run_dir / "state.json"
+    state = json.loads(state_path.read_text(encoding="utf-8"))
+    state["session_authority"] = "pre_submit"
+    state["pre_submit_failure"] = {
+        "code": "ORACLE_MODEL_SWITCHER_PRE_SUBMIT_FAILED",
+        "output_absent": True,
+        "conversation_url_absent": True,
+    }
+    state_path.write_text(json.dumps(state), encoding="utf-8")
+
+    packet = module.build_packet(run_dir)
+
+    assert packet["bucket"] == "pre-submit-ui-contract"
+    assert packet["signature"] == "model-option-label-missing"
+    assert packet["safe_for_fresh_run"] is True
+
+
+def test_version_compatibility_drift_incident_is_safe_to_retry(tmp_path: Path) -> None:
+    module = load()
+    run_dir = write_run(tmp_path, "c" * 8, status="failed")
+    state_path = run_dir / "state.json"
+    state = json.loads(state_path.read_text(encoding="utf-8"))
+    state["oracle"] = {"resolved_version": "unresolved"}
+    state["session_authority"] = "pre_submit"
+    state_path.write_text(json.dumps(state), encoding="utf-8")
+    (run_dir / "stderr.log").write_text(
+        "version resolution failed: Oracle compatibility is validated only for the tested version\n",
+        encoding="utf-8",
     )
 
     packet = module.build_packet(run_dir)
 
     assert packet["bucket"] == "pre-submit-host-environment"
-    assert packet["signature"] == "oracle-attachment-size-preflight-rejected"
+    assert packet["signature"] == "oracle-version-resolution-prelaunch-compatibility-drift"
     assert packet["safe_for_fresh_run"] is True
-    assert packet["unresolved_owners"] == []
 
 
 def test_packet_never_marks_fresh_run_safe_while_another_session_owns_project(tmp_path: Path) -> None:

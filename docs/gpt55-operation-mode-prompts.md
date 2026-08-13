@@ -8,7 +8,9 @@ All new modes use Oracle:
 
 - regular direct, plan, review, edit, orchestrator, research, comprehensive,
   and Web Multi-GPT use Oracle plus the manually registered DevSpace app;
-- Pro uses Oracle attachment-only and never selects an app;
+- qualified Pro uses Oracle plus the manually registered DevSpace app in an
+  exact-root, read-only route; explicit `pro-attachment` is attachment-only
+  only for immutable or external evidence that DevSpace cannot read;
 - CodexPro and agbrowse may be used only for exact recovery of an already
   persisted legacy run.
 

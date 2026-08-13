@@ -1,0 +1,29 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ventianima-lab.github.io/codexpro-automation/contracts/gjc-interview-v1.schema.json",
+  "title": "CodexPro GJC Brownfield Interview",
+  "type": "object",
+  "required": ["schema", "interview_id", "project_root", "threshold", "topology_locked", "components", "coverage", "ambiguity", "rounds", "status"],
+  "properties": {
+    "schema": {"const": "codex.gjc.interview/v1"},
+    "interview_id": {"type": "string", "minLength": 1},
+    "project_root": {"type": "string", "minLength": 1},
+    "threshold": {"type": "number", "minimum": 0, "maximum": 1},
+    "topology_locked": {"const": true},
+    "components": {"type": "array", "minItems": 1, "maxItems": 6, "items": {"type": "object", "required": ["name"]}},
+    "coverage": {
+      "type": "object",
+      "required": ["goal", "constraints", "success_criteria", "context"],
+      "additionalProperties": false,
+      "properties": {
+        "goal": {"type": "number", "minimum": 0, "maximum": 1},
+        "constraints": {"type": "number", "minimum": 0, "maximum": 1},
+        "success_criteria": {"type": "number", "minimum": 0, "maximum": 1},
+        "context": {"type": "number", "minimum": 0, "maximum": 1}
+      }
+    },
+    "ambiguity": {"type": "number", "minimum": 0, "maximum": 1},
+    "rounds": {"type": "array"},
+    "status": {"enum": ["interviewing", "awaiting_approval", "approved"]}
+  }
+}

@@ -32,12 +32,14 @@ def compile_manifest(
     output_path: Path,
     reasoning_level: str | None = None,
     attachment_paths: Iterable[Path] | None = None,
+    app_name: str | None = None,
 ) -> dict[str, Any]:
     contract = PROFILES.build_launch_contract(
         mode,
         mission_path=mission_path,
         reasoning_level=reasoning_level,
         attachment_paths=list(attachment_paths or ()),
+        app_name=app_name,
     )
     result = {"ok": True, "contract": contract, "oracle_manifest_path": None}
     if not contract["oracle_launch"]:
@@ -50,17 +52,22 @@ def compile_manifest(
         "project_root": str(root),
         "mission_path": contract["mission_path"],
         "mode": "browser",
-        "transport": "pro-attachment-only" if contract["mode"] == "pro" else "devspace",
+        "task_kind": contract["task_kind"],
+        "transport": {
+            "oracle-pro-attachment-only": "pro-attachment-only",
+            "oracle-pro-devspace-readonly": "pro-devspace-readonly",
+            "oracle-devspace": "devspace",
+        }[contract["route"]],
         "model": contract.get("model") or "gpt-5.6",
         "model_strategy": "select",
-        "thinking_time": "heavy",
+        "thinking_time": contract["thinking_time"],
         "research": "deep" if contract["research"] else "off",
         "archive": "auto",
     }
-    if contract["mode"] == "pro":
+    if contract["route"] == "oracle-pro-attachment-only":
         manifest["attachments"] = contract["attachments"]
     else:
-        manifest["app_name"] = "DevSpace"
+        manifest["app_name"] = contract["app_name"]
         manifest["task_outcome_contract"] = "v1"
     target.write_text(json.dumps(manifest, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     result["oracle_manifest_path"] = str(target)
@@ -75,6 +82,7 @@ def main(argv: Iterable[str] | None = None) -> int:
     parser.add_argument("--manifest-output", type=Path, required=True)
     parser.add_argument("--reasoning-level")
     parser.add_argument("--attachment", type=Path, action="append", default=[])
+    parser.add_argument("--app-name")
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args(argv)
     try:
@@ -85,6 +93,7 @@ def main(argv: Iterable[str] | None = None) -> int:
             output_path=args.manifest_output,
             reasoning_level=args.reasoning_level,
             attachment_paths=args.attachment,
+            app_name=args.app_name,
         )
         if compiled["oracle_manifest_path"]:
             run = RUNNER.execute_run(Path(compiled["oracle_manifest_path"]), dry_run=args.dry_run)

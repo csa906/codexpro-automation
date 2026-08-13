@@ -2,9 +2,12 @@
 param(
  [string]$CodexHome=$(if($env:CODEX_HOME){$env:CODEX_HOME}else{Join-Path $env:USERPROFILE '.codex'}),
  [switch]$InstallLegacyRecoveryDependency,
- [switch]$SkipDependencyInstall
+ [switch]$SkipDependencyInstall,
+ [switch]$EnableLocalMultiGpt,
+ [switch]$DisableLocalMultiGpt
 )
 $ErrorActionPreference='Stop'
+if($EnableLocalMultiGpt -and $DisableLocalMultiGpt){throw 'EnableLocalMultiGpt and DisableLocalMultiGpt are mutually exclusive'}
 $ManageLegacyDependency=[bool]$InstallLegacyRecoveryDependency -and -not [bool]$SkipDependencyInstall
 $RepoRoot=Split-Path -Parent $MyInvocation.MyCommand.Path
 $Manifest=Get-Content (Join-Path $RepoRoot 'install-manifest.json') -Raw|ConvertFrom-Json
@@ -44,7 +47,7 @@ function Write-JsonDurable([string]$Path,$Value){
 }
 function Test-IsWithinRoot([string]$Root,[string]$Path){$r=[IO.Path]::GetFullPath($Root).TrimEnd([IO.Path]::DirectorySeparatorChar,[IO.Path]::AltDirectorySeparatorChar);$p=[IO.Path]::GetFullPath($Path);$p.StartsWith($r+[IO.Path]::DirectorySeparatorChar,[StringComparison]::OrdinalIgnoreCase)}
 function Get-SafeChild([string]$Root,[string]$Relative){if([string]::IsNullOrWhiteSpace($Relative)-or[IO.Path]::IsPathRooted($Relative)-or$Relative -match '(^|[\\/])\.{1,2}([\\/]|$)'){throw "unsafe relative path: $Relative"};$p=[IO.Path]::GetFullPath((Join-Path $Root $Relative));if(!(Test-IsWithinRoot $Root $p)){throw "path escapes root: $Relative"};$cursor=Split-Path -Parent $p;while((Test-IsWithinRoot $Root $cursor) -and $cursor -ne [IO.Path]::GetFullPath($Root)){if(Test-Path -LiteralPath $cursor){$i=Get-Item -LiteralPath $cursor -Force;if($i.LinkType){throw "symlink/reparse path refused: $cursor"}};$cursor=Split-Path -Parent $cursor};$p}
-function Get-ManifestFiles([string]$Root,$Value){$files=@();foreach($pattern in $Value.include){if($pattern -match '(^|/)\.{1,2}($|/)' -or [IO.Path]::IsPathRooted($pattern)){throw "unsafe manifest pattern: $pattern"};$base=if($pattern.StartsWith('bin/')){Join-Path $Root 'bin'}elseif($pattern.StartsWith('skills/')){Join-Path $Root 'skills'}elseif($pattern.StartsWith('mcp_servers/')){Join-Path $Root 'mcp_servers'}elseif($pattern.StartsWith('scripts/')){Join-Path $Root 'scripts'}elseif($pattern.StartsWith('contracts/')){Join-Path $Root 'contracts'}elseif($pattern.StartsWith('tests/fixtures/')){Join-Path $Root 'tests/fixtures'}else{throw "unsupported manifest root: $pattern"};$patternMatches=@();foreach($item in @(Get-ChildItem -LiteralPath $base -File -Recurse -Force)){if($item.LinkType){throw "manifest refuses symlink: $($item.FullName)"};$relative=$item.FullName.Substring($Root.Length).TrimStart([char[]]'\/').Replace('\','/');if($relative -like $pattern){[void](Get-SafeChild $Root $relative);$patternMatches+=$relative}};if(!$patternMatches.Count){throw "manifest pattern matched no files: $pattern"};$files+=$patternMatches};@($files|Sort-Object -Unique)}
+function Get-ManifestFiles([string]$Root,$Patterns){$files=@();foreach($pattern in @($Patterns)){if($pattern -match '(^|/)\.{1,2}($|/)' -or [IO.Path]::IsPathRooted($pattern)){throw "unsafe manifest pattern: $pattern"};$base=if($pattern.StartsWith('bin/')){Join-Path $Root 'bin'}elseif($pattern.StartsWith('skills/')){Join-Path $Root 'skills'}elseif($pattern.StartsWith('mcp_servers/')){Join-Path $Root 'mcp_servers'}elseif($pattern.StartsWith('scripts/')){Join-Path $Root 'scripts'}elseif($pattern.StartsWith('contracts/')){Join-Path $Root 'contracts'}elseif($pattern.StartsWith('docs/')){Join-Path $Root 'docs'}elseif($pattern.StartsWith('marketplace/')){Join-Path $Root 'marketplace'}elseif($pattern.StartsWith('tests/fixtures/')){Join-Path $Root 'tests/fixtures'}else{throw "unsupported manifest root: $pattern"};$patternMatches=@();foreach($item in @(Get-ChildItem -LiteralPath $base -File -Recurse -Force)){if($item.LinkType){throw "manifest refuses symlink: $($item.FullName)"};$relative=$item.FullName.Substring($Root.Length).TrimStart([char[]]'\/').Replace('\','/');if($relative -like $pattern){[void](Get-SafeChild $Root $relative);$patternMatches+=$relative}};if(!$patternMatches.Count){throw "manifest pattern matched no files: $pattern"};$files+=$patternMatches};@($files|Sort-Object -Unique)}
 function Resume-PendingInstallTransactions([string]$Root){
   $backupBase=Join-Path $Root 'backups';if(!(Test-Path -LiteralPath $backupBase)){return}
   foreach($journalPath in @(Get-ChildItem -LiteralPath $backupBase -Filter 'install.wal.json' -File -Recurse -Force -ErrorAction SilentlyContinue|Sort-Object FullName)){
@@ -69,9 +72,18 @@ function Resume-PendingInstallTransactions([string]$Root){
     $journal.status='ROLLED_BACK_AFTER_CRASH';$journal|Add-Member -NotePropertyName recovered_at -NotePropertyValue ([DateTime]::UtcNow.ToString('o')) -Force;Write-JsonDurable $journalPath.FullName $journal
   }
 }
-$Files=@(Get-ManifestFiles $RepoRoot $Manifest)
-if($WhatIfPreference){$Files|ForEach-Object{"Would stage and install $_"};if($ManageLegacyDependency){"Would explicitly install and contract-validate recovery-only agbrowse@$($Manifest.external.agbrowse.version)"}else{'Would leave frozen agbrowse/CodexPro legacy dependencies untouched'};exit 0}
-$records=@();$installed=@();$receipt=$null;$dependency=$null;$dependencyApplied=$false;$dependencySourceReceipt=$null
+$latestReceipt=@(Get-ChildItem -LiteralPath $ReceiptRoot -Filter 'codexpro-automation-*.json' -File -ErrorAction SilentlyContinue|Sort-Object LastWriteTimeUtc -Descending|Select-Object -First 1)
+$priorLocalMultiGpt=$null
+if($latestReceipt.Count){try{$priorReceipt=Get-Content -LiteralPath $latestReceipt[0].FullName -Raw|ConvertFrom-Json;$priorLocalMultiGpt=$priorReceipt.optional_components.local_multi_gpt.enabled}catch{$priorLocalMultiGpt=$null}}
+if($EnableLocalMultiGpt){$InstallLocalMultiGpt=$true}
+elseif($DisableLocalMultiGpt){$InstallLocalMultiGpt=$false}
+elseif($null -ne $priorLocalMultiGpt){$InstallLocalMultiGpt=[bool]$priorLocalMultiGpt}
+elseif(!$WhatIfPreference -and !$env:CI -and !$env:PYTEST_CURRENT_TEST -and [Environment]::UserInteractive -and -not [Console]::IsInputRedirected){$answer=Read-Host ([string]$Manifest.optional_components.local_multi_gpt.prompt);$InstallLocalMultiGpt=$answer -match '^(?i:y|yes|예|네)$'}
+else{$InstallLocalMultiGpt=[bool]$Manifest.optional_components.local_multi_gpt.default_install}
+$Patterns=@($Manifest.include);if($InstallLocalMultiGpt){$Patterns+=@($Manifest.optional_components.local_multi_gpt.include)}
+$Files=@(Get-ManifestFiles $RepoRoot $Patterns)
+if($WhatIfPreference){$Files|ForEach-Object{"Would stage and install $_"};if($InstallLocalMultiGpt){'Would install and register optional Local Multi-GPT MCP'}else{'Would not install optional Local Multi-GPT MCP (use -EnableLocalMultiGpt to opt in)'};if($ManageLegacyDependency){"Would explicitly install and contract-validate recovery-only agbrowse@$($Manifest.external.agbrowse.version)"}else{'Would leave frozen agbrowse/CodexPro legacy dependencies untouched'};exit 0}
+$records=@();$installed=@();$receipt=$null;$dependency=$null;$dependencyApplied=$false;$dependencySourceReceipt=$null;$localMultiGpt=[ordered]@{enabled=$InstallLocalMultiGpt;mode=$(if($InstallLocalMultiGpt){'pending'}else{'skipped'});reason=$(if($InstallLocalMultiGpt){$null}else{'not-selected'});receipt=$null}
 $dependencyPreflightToken=$null
 Resume-PendingInstallTransactions $HomeRoot
 if($ManageLegacyDependency){
@@ -93,11 +105,13 @@ try{
   if($record.installed_sha256 -ne (Get-Hash $destination)){throw "commit hash verification failed: $relative"};$record.phase='VERIFIED';$record.transitions+=@('VERIFIED');Write-JsonDurable $journalPath $journal;$record.phase='COMPLETE';$record.transitions+=@('COMPLETE');Write-JsonDurable $journalPath $journal;$receiptRecord=[ordered]@{path=$relative;action=$action;installed_sha256=$record.installed_sha256;backup_sha256=$backupHash};$records+=$receiptRecord;$installed+=$receiptRecord;$stepIndex++
  }
  if($ManageLegacyDependency){& (Join-Path $RepoRoot 'update.ps1') -AgbrowseVersion ([string]$Manifest.external.agbrowse.version) -CodexHome $HomeRoot -PreflightToken $dependencyPreflightToken;if($LASTEXITCODE){throw "agbrowse dependency install failed with exit code $LASTEXITCODE"};$dependencyApplied=$true;$dependencySourceReceipt=Join-Path $HomeRoot 'agbrowse-update-receipt.json';if(!(Test-Path -LiteralPath $dependencySourceReceipt)){throw 'agbrowse dependency install produced no update receipt'};$dependencyReceipt=Get-SafeChild $BackupRoot 'dependency-update-receipt.json';New-Item -ItemType Directory -Force -Path (Split-Path -Parent $dependencyReceipt)|Out-Null;Copy-Item -LiteralPath $dependencySourceReceipt -Destination $dependencyReceipt -Force;$dependency=[ordered]@{mode='applied';role='persisted-run-recovery-only';receipt=$dependencyReceipt;receipt_sha256=(Get-Hash $dependencyReceipt)}}else{$dependency=[ordered]@{mode='skipped';reason='legacy-recovery-dependencies-frozen'}}
+ if($InstallLocalMultiGpt){$setupOutput=@(& python (Join-Path $RepoRoot 'bin/codex_local_multi_gpt_setup.py') enable --codex-home $HomeRoot);if($LASTEXITCODE){throw "Local Multi-GPT MCP registration failed with exit code ${LASTEXITCODE}: $($setupOutput -join ' ')"};try{$setup=($setupOutput -join [Environment]::NewLine)|ConvertFrom-Json}catch{throw 'Local Multi-GPT MCP setup produced invalid output'};if(!$setup.ok){throw 'Local Multi-GPT MCP setup did not pass'};$localMultiGpt=[ordered]@{enabled=$true;mode=if($setup.changed){'registered'}else{'preserved'};reason=$null;receipt=$setup.receipt;cli=$setup.cli;cli_version=$setup.cli_version}}
  $journal.status='COMPLETE';$journal.completed_at=[DateTime]::UtcNow.ToString('o');Write-JsonDurable $journalPath $journal
- New-Item -ItemType Directory -Force -Path $ReceiptRoot|Out-Null;$receipt=Get-SafeChild $ReceiptRoot "codexpro-automation-$Stamp-$Nonce.json";Write-JsonDurable $receipt ([ordered]@{schema='codexpro.install-receipt/v3';installed_at=[DateTime]::UtcNow.ToString('o');manifest_version=$Manifest.version;backup=$BackupRoot;files=$records;dependency=$dependency;dependency_note='CodexPro and agbrowse are frozen for new work; dependency changes require explicit legacy-recovery opt-in.';wal=$journalPath})
+ New-Item -ItemType Directory -Force -Path $ReceiptRoot|Out-Null;$receipt=Get-SafeChild $ReceiptRoot "codexpro-automation-$Stamp-$Nonce.json";Write-JsonDurable $receipt ([ordered]@{schema='codexpro.install-receipt/v3';installed_at=[DateTime]::UtcNow.ToString('o');manifest_version=$Manifest.version;backup=$BackupRoot;files=$records;dependency=$dependency;optional_components=[ordered]@{local_multi_gpt=$localMultiGpt};dependency_note='CodexPro and agbrowse are frozen for new work; dependency changes require explicit legacy-recovery opt-in.';wal=$journalPath})
  "Installed $($Files.Count) files. Receipt: $receipt"
 } catch {
   $conflicts=@()
+  if($localMultiGpt.receipt){$registrationRollback=@(& python (Join-Path $RepoRoot 'bin/codex_local_multi_gpt_setup.py') rollback --codex-home $HomeRoot --receipt ([string]$localMultiGpt.receipt));if($LASTEXITCODE){$conflicts+=@{path='config.toml';action='local_multi_gpt_registration_rollback_incomplete';detail=($registrationRollback -join ' ')}}}
   foreach($record in @($installed|Sort-Object -Descending path)) {
     try {
       $destination=Get-SafeChild $HomeRoot $record.path

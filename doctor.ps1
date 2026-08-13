@@ -10,6 +10,8 @@ $ReceiptRoot = Join-Path $CodexRoot 'receipts'
 $Issues = @()
 $Warnings = @()
 $Commands = @('powershell -ExecutionPolicy Bypass -File .\install.ps1 -WhatIf')
+$LocalMultiGptEnabled = $false
+$LocalMultiGptDoctor = $null
 
 function Get-Sha256([string]$Path) {
   $stream = $null
@@ -60,6 +62,7 @@ if (!$Receipt) {
         $Issues += @{code='HASH_MISMATCH'; path=$Record.path; actual=$Actual}
       }
     }
+    $LocalMultiGptEnabled = [bool]$Value.optional_components.local_multi_gpt.enabled
   } catch {
     $Issues += @{code='RECEIPT_INVALID'; detail=$_.Exception.Message}
   }
@@ -95,6 +98,17 @@ $Commands += 'npx -y @steipete/oracle --version'
 $Commands += 'python .\skills\chatgpt-workspace-setup\scripts\devspace_tailscale_setup.py doctor --root C:\project --hostname your-device.your-tailnet.ts.net'
 
 $Python = Get-Command python.exe,python -ErrorAction SilentlyContinue | Select-Object -First 1
+if ($LocalMultiGptEnabled) {
+  if (!$Python) {
+    $Issues += @{code='LOCAL_MULTI_GPT_PYTHON_MISSING'}
+  } else {
+    $LocalMultiOutput = @(& $Python.Source (Join-Path $CodexRoot 'bin/codex_local_multi_gpt_setup.py') doctor --codex-home $CodexRoot)
+    try { $LocalMultiGptDoctor = ($LocalMultiOutput -join [Environment]::NewLine) | ConvertFrom-Json } catch { $LocalMultiGptDoctor = $null }
+    if ($LASTEXITCODE -or !$LocalMultiGptDoctor -or !$LocalMultiGptDoctor.ok) {
+      $Issues += @{code='LOCAL_MULTI_GPT_MCP_INVALID'; detail=($LocalMultiOutput -join ' ')}
+    }
+  }
+}
 $UpdateReceiptPath = Join-Path $CodexRoot 'agbrowse-update-receipt.json'
 $UpdateReceipt = $null
 $SelectedVersion = '0.1.18'
@@ -114,10 +128,9 @@ if (Test-Path -LiteralPath $UpdateReceiptPath) {
   }
 }
 
-$LegacyContractPresent = [bool]$Agbrowse -or [bool]$UpdateReceipt -or (Test-Path -LiteralPath $Contract)
-if ($LegacyContractPresent -and (!$Python -or !(Test-Path -LiteralPath $Contract))) {
-  $Issues += @{code='CONTRACT_UNVERIFIED'; detail='Installed legacy agbrowse cannot be contract-verified'}
-} elseif ($LegacyContractPresent) {
+if (($Agbrowse -or $UpdateReceipt) -and (!$Python -or !(Test-Path -LiteralPath $Contract))) {
+  $Issues += @{code='CONTRACT_UNVERIFIED'; detail='Python or contract manifest unavailable'}
+} elseif ($Agbrowse -or $UpdateReceipt) {
   if ($UpdateReceipt -and (Get-Sha256 $Contract) -ne [string]$UpdateReceipt.contract_sha256) {
     $Issues += @{code='CONTRACT_RECEIPT_HASH_MISMATCH'; contract=$Contract}
   } else {
@@ -157,8 +170,9 @@ if ($LegacyContractPresent -and (!$Python -or !(Test-Path -LiteralPath $Contract
   warnings = $Warnings
   commands = $Commands
   agbrowse = @{selected_version=$SelectedVersion; contract=$Contract; update_receipt=$UpdateReceiptPath}
-  oracle = @{package='@steipete/oracle';tested_version='0.16.1';resolution='npx with a per-run isolated npm prefix'}
+  oracle = @{package='@steipete/oracle';tested_version='0.17.1';resolution='npx with a per-run isolated npm prefix'}
   devspace = @{package='@waishnav/devspace';tested_version='1.0.4';setup='explicit setup skill only'}
+  local_multi_gpt = @{enabled=$LocalMultiGptEnabled;doctor=$LocalMultiGptDoctor}
   codexpro = @{
     installation = 'external'
     detail = 'CodexPro is not installed by install.ps1; app bootstrap scripts acquire the latest supported external runtime.'
