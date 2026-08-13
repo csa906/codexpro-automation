@@ -157,7 +157,8 @@
       "package": "@steipete/oracle",
       "tested_version": "0.17.1-custom.10",
       "license": "MIT",
-      "installation": "colocated custom CLI/MCP at mcp_servers/oracle-0.17.1; it is not an npm tarball, so public npm integrity is inapplicable; new runs require its @steipete/oracle package identity to resolve exactly to 0.17.1-custom.10 and runtime patch hashes to match"
+      "artifact_sha256": "10B97E6E0B003F184B4F30A7FBBFCA80883A118206BB6D736F12C91584E60ECD",
+      "installation": "colocated custom CLI/MCP at mcp_servers/oracle-0.17.1, installed from the locally verified custom tarball rather than a public npm registry artifact; new runs require its @steipete/oracle package identity to resolve exactly to 0.17.1-custom.10 and runtime patch hashes to match"
     },
     "devspace": {
       "package": "@waishnav/devspace",

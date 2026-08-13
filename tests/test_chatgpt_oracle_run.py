@@ -211,7 +211,9 @@ def test_manifest_does_not_relabel_public_npm_integrity_as_custom_package_identi
 
     assert oracle["tested_version"] == "0.17.1-custom.10"
     assert "integrity" not in oracle
-    assert "not an npm tarball" in oracle["installation"]
+    assert oracle["artifact_sha256"] == "10B97E6E0B003F184B4F30A7FBBFCA80883A118206BB6D736F12C91584E60ECD"
+    assert "locally verified custom tarball" in oracle["installation"]
+    assert "rather than a public npm registry artifact" in oracle["installation"]
 
 
 def test_new_run_rejects_a_noncustom_oracle_version_before_browser_launch() -> None:
