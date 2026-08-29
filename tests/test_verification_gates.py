@@ -31,6 +31,9 @@ def test_fast_gate_targets_exist_and_cover_the_pre_submit_contracts() -> None:
     assert "tests/test_chatgpt_oracle_compat.py" in covered
     assert "tests/test_chatgpt_oracle_incident.py" in covered
     assert "tests/test_chatgpt_oracle_diagnose.py" in covered
+    assert "tests/test_chatgpt_oracle_dispatch.py" in covered
+    assert "tests/test_chatgpt_oracle_fallback.py" in covered
+    assert "tests/test_chatgpt_oracle_comprehensive.py" in covered
     assert gate.DEFAULT_BUDGET_SECONDS == 60.0
 
 
@@ -99,3 +102,5 @@ def test_release_manifest_ships_the_new_verification_scripts() -> None:
 
     assert "bin/chatgpt_oracle_incident.py" in manifest["include"]
     assert "bin/chatgpt_oracle_incident.py" in package["files"]
+    assert "bin/chatgpt_oracle_fallback.py" in manifest["include"]
+    assert "bin/chatgpt_oracle_fallback.py" in package["files"]

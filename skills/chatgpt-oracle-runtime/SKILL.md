@@ -1,65 +1,89 @@
 ---
 name: chatgpt-oracle-runtime
-description: "Current Oracle runtime path for new ChatGPT work: regular modes use DevSpace, qualified Pro uses read-only DevSpace, and explicit Pro attachments remain for bounded evidence."
+description: "Current Oracle runtime for mission-scoped ChatGPT work: Power 1-5 is independent of operation authority, DevSpace is preferred, and safe pre-submit failures may use hashed attachments."
 ---
 
 # ChatGPT Oracle Runtime
 
-This is the only active browser path for all new GPT work. CodexPro and
-agbrowse are frozen for exact legacy recovery only. Regular modes use DevSpace;
-qualified Pro uses the same app read-only, while `pro-attachment` uses Oracle
-attachment transport for its explicit evidence boundary.
+This is the only active browser path for new GPT work. CodexPro and agbrowse
+are frozen for exact persisted-run recovery only.
 
-`chatgpt_oracle_dispatch.py` supports exactly `direct`, `plan`, `review`, `edit`,
-`orchestrator`, `deep-research`, `manual`, and `pro`. `manual` is a supported
-`manual-no-launch` profile, not a new submission route. `answer` in
-`chatgpt-question-designer` is the prompt-design alias for dispatcher mode
-`direct`, not a separate dispatcher key. Regular routes
-select `gpt-5.6` and send only `@DevSpace` plus the absolute project mission
-path and a compact exact-workspace guard. The web GPT must use only the exact
-project root recorded in that mission, read the mission and applicable
-`AGENTS.md` completely first, and may retry that same root once after a timeout.
-It must not substitute a parent, child, active workspace, or shell boundary
-workaround. Qualified Pro selects `GPT-5.6 Sol` at the Pro effort and uses
-DevSpace read-only at the same exact root. It begins discovery with `read('.')`
-directory-list compatibility and may read decision-relevant material broadly,
-but never writes, edits, invokes shell, or runs commands. Explicit
-`pro-attachment` sends one short instruction plus exact attachment files.
-Regular routes select `GPT-5.6 Sol` with Oracle `extra-high`, require Oracle
-evidence for visible `Extra High`, and require Power 4/5. `heavy` is a
-compatibility token reserved for `GPT-5.6 Sol` Power 5/5 Pro; it is not a
-regular-route thinking setting. Never invent xhigh or silently downgrade.
+## Modes, Power, and authority
 
-On the first DevSpace-backed submission for a new project, the runner checks
-exact equality with local DevSpace `allowedRoots` before creating the Oracle
-run directory or browser session. It caches success against the config hash
-and rechecks only after config changes. This is a local root guard, not a
-repeated endpoint/read probe or ChatGPT app/settings inspection.
+The dispatcher supports `direct`, `plan`, `review`, `edit`, `orchestrator`,
+`deep-research`, `manual`, and `attachment`. `answer` is the prompt-design alias
+for `direct`. `--mode pro` is a compatibility alias for `direct` at Power 5;
+`pro-attachment` is the Power 5 compatibility alias for `attachment`. Neither
+alias creates a separate permission mode.
 
-## Manifest
+For `GPT-5.6 Sol`, Power 1-5 correspond to Low, Medium, High, Very High, and
+Pro. Preserve an explicit user-selected power. Otherwise choose Power 5
+automatically for complex or important work and retain a lower power for
+ordinary work; never use power selection to expand authority. Deep Research
+owns its separate effort flow.
 
-Require schema `codex.chatgpt.oracle-run/v1` with:
+Authority comes only from the operation and mission:
 
-- `project_root`: absolute existing directory.
-- `mission_path`: absolute UTF-8 regular file inside the project.
-- `app_name`: one-line app name, without a leading `@`, for regular routes.
-- `task_kind: pro`; qualified Pro uses `app_name: DevSpace`, while explicit
-  `pro-attachment` includes one or more exact `attachments`.
-- `mode`: `browser`.
-- Optional `run_root`, `oracle_command`, `oracle_args`, `thinking_time`,
-  hash-validated `copy_profile`, and mutex timeout.
-- Regular direct/orchestrator manifests use `task_outcome_contract: "v1"`.
+- `direct`/answer, `plan`, and `review` are read-only.
+- An explicitly authorized `edit` or `orchestrator` mission may write in its
+  exact project root using `apply_patch`, `bash`/shell commands, and tests.
+- External actions, publishing, destructive changes, credentials, and writes
+  outside that root require separate explicit authority.
 
-## Run
+Authorized writers must hold the normalized exact-project mutex, preserve
+unrelated WIP and declared exclusions, and never broadly stage, reset, stash,
+clean, or overwrite another writer's changes.
+Snapshot/patch proof fails closed on symlinks and reparse points. The mutex and
+WAL guard ordinary local concurrency and crashes; they are not an OS sandbox
+against a malicious same-account process racing filesystem operations.
 
-Preview first:
+## Transport selection
+
+DevSpace is preferred at every Power. Send only `@DevSpace`, the absolute
+mission path, and the exact-workspace guard. The web GPT reads the mission and
+applicable `AGENTS.md` chain completely, uses only that normalized root, and
+may retry opening that same root once. A parent, child, similarly named, active,
+or shell-boundary workspace is not a substitute.
+
+Qualify exact equality against DevSpace `allowedRoots` before the first run and
+cache the result by config hash. Do not repeatedly automate ChatGPT app/settings
+state. A deterministic DevSpace failure may automatically fall back to
+attachment transport only when it is proven pre-submit and mutation-free.
+
+Attachment fallback preserves the operation mode, selected Power 1-5, exact
+root, and immutable mission bytes. The mission explicitly enumerates regular
+non-symlink attachments and their SHA-256 values; the runtime must not discover
+files from prose or scrape the project. `pro-attachment` is only a legacy
+Power-5 alias for this generic transport.
+
+For authorized write missions, attachment transport returns a structured patch
+instead of claiming workspace mutation. The host validates every relative path
+and preimage hash, applies the patch transactionally under the same project
+mutex, runs the mission's local gate, and verifies the final scope and diff.
+
+Once a prompt may have been submitted, or any mutation is observed or possible,
+fallback and fresh submission are forbidden. Only exact-session recovery may
+continue.
+
+## Manifest and run
+
+Use schema `codex.chatgpt.oracle-run/v1`. Bind the absolute existing
+`project_root`, project-contained UTF-8 `mission_path`, operation `task_kind`,
+selected model/Power, transport, host-only output paths, and mutex timeout.
+Attachment manifests additionally bind the ordered attachment paths and hashes.
+
+For a new one-shot run, use `chatgpt_oracle_dispatch.py`. Read-only modes get a
+minimal mission-only fallback contract automatically. `edit` and
+`orchestrator` must pass `--fallback-contract` with schema
+`codex.chatgpt.oracle-attachment-fallback/v1`, exact root/mission/Power,
+evidence hashes, edit paths/operations/preimages, and one local gate.
+
+Preview with the wrapper, which shows final argv, prompt, mission SHA-256, and
+artifact paths without launching Oracle:
 
 ```powershell
 python skills/chatgpt-oracle-runtime/scripts/run_chatgpt_oracle.py run --manifest C:\absolute\oracle-job.json --dry-run
 ```
-
-The preview must include final argv, prompt first line, absolute mission path, SHA-256, and artifact paths without launching Oracle or a browser.
-Use this wrapper preview only. Do not substitute Oracle's own browser `--dry-run`, because Oracle 0.17.1 may still enter browser preflight.
 
 Execute only after an explicit live-run request:
 
@@ -67,68 +91,51 @@ Execute only after an explicit live-run request:
 python skills/chatgpt-oracle-runtime/scripts/run_chatgpt_oracle.py run --manifest C:\absolute\oracle-job.json
 ```
 
-Complete requires Oracle exit code zero, a nonempty `--write-output` artifact,
-and—when `task_outcome_contract` is `v1`—a final
-`TASK_OUTCOME: EXECUTED` marker. `TASK_OUTCOME: NOT_EXECUTED` and
-`TASK_OUTCOME: BLOCKED` preserve terminal transport evidence but return
-attention-required; transport success alone never claims project execution.
-Prompts require citations and Markdown reference definitions before the marker.
-For provider-rendered compatibility, only one exact marker followed solely by
-single-line HTTP(S) Markdown reference definitions is also classifiable; any
-ordinary trailing prose or conflicting marker remains `unknown`.
-A nonzero Oracle exit after launch, including a browser response timeout, is
-`attention_required` rather than proof that the web session failed. It retains
-same-project ownership and permits only exact-slug `live` or `harvest`
-recovery; it never authorizes a replacement submission.
-For non-Pro runs, `--browser-timeout` is one overall answer budget. Oracle
-fallback capture consumes only the remaining time. A host wall-clock watchdog
-adds a short grace for a wedged CDP call; if it expires, the runner returns
-`post_submit_watchdog_timeout`, preserves the exact process/session and browser
-evidence, and remains unsafe for a fresh submission.
+Do not substitute Oracle's own browser `--dry-run`; version-specific browser
+preflight may still run. Require the hash-gated Oracle compatibility contract,
+isolated copied profile, owned hidden window, exact model, and visible selected
+Power evidence before accepting a send.
 
-## Recovery
+## Completion and recovery
 
-Recovery always reuses the stored Oracle slug and never restarts or submits:
+All missions require exit zero, fresh nonempty host-only output, immutable run
+identity, and a refreshed transcript. When the v1 outcome contract applies,
+`TASK_OUTCOME: EXECUTED` must be the final semantic marker; provider transport
+success alone is not execution proof.
+
+An authorized write mission is complete only after the host proves the actual
+diff, every changed path is within declared scope, unrelated WIP is preserved,
+and the declared local gate exits zero. This applies to direct DevSpace writes
+and host-applied attachment patches. Provider claims or patch generation alone
+are insufficient.
+
+Recover only the stored Oracle slug:
 
 ```powershell
 python skills/chatgpt-oracle-runtime/scripts/run_chatgpt_oracle.py recover --run-dir C:\absolute\run --action harvest
 ```
 
-Use `--action live` only to keep following the same stored session. A successful recovery must write a nonempty stored `output.md`, update `state.json` to `complete`, and refresh `transcript.md`; exit code zero without output is `attention_required`.
-The CLI keeps `--action live` inside one exact-slug recovery process for up to
-90 minutes by default. Transient `stalled`, `running`, or observer disagreement
-states keep the same live authority and project lock; they do not return every
-few minutes for Codex-side polling. When the exact session becomes terminal,
-the same process performs one harvest and returns once.
-If Oracle proves both that no live tab matches the exact slug and that its
-metadata has no recoverable canonical conversation URL, the runner returns
-`recovery_binding_unavailable` immediately instead of repeating that invariant
-failure for 90 minutes. It preserves `submitted_unknown` ownership; restore the
-exact persisted conversation URL before recovering the same slug, and never
-replace or resubmit it.
+Use `live` only to follow that same session. Recovery never restarts, resubmits,
+changes mode/model/Power/transport, or creates a replacement conversation.
+Observer disagreement, prompt-not-observed timeout, nonzero post-submit exit,
+or a missing live tab remains attention-required under the same project lock
+until exact-session evidence settles it. A no-submission settlement requires
+the existing hash-bound evidence and explicit user confirmation; it does not
+itself authorize a new run.
 
-Oracle's `Prompt did not appear in conversation before timeout (send may have
-failed)` message is likewise submission-uncertain. No-live-tab plus missing
-saved-URL recovery evidence does not mechanically prove non-submission. A
-maintenance owner may release that exact run only after explicit user
-confirmation through `chatgpt_oracle_run.py settle-no-submission` with the
-exact run directory, `--confirmation user-confirmed-no-submission`, and a
-concise reason. The settlement is hash-bound to the comprehensive stage,
-direct Web Multi child, or standalone qualified-Pro identity and immutable
-mission evidence and does not launch Oracle. Comprehensive mode may consume
-only one replacement for its binding; standalone qualified Pro permits only
-the separately authorized single fresh retry with identical mission bytes.
+One-shot dispatcher runs persist their contract and whole-workspace baseline
+before submission. After exact recovery reaches terminal output, resume the
+host-only acceptance/apply phase with:
 
-Direct same-project runs hold one cross-process mutex for the entire Oracle
-process lifetime. A Multi parent owns that project mutex while authorized
-children use a short parent-scoped launch mutex and isolated copied Chrome
-profiles, then wait concurrently.
-Control state, Oracle output, and transcripts live under
-`%USERPROFILE%\.codex\state\chatgpt-oracle`, outside the DevSpace-writable
-project.
+```powershell
+python "$env:USERPROFILE\.codex\bin\chatgpt_oracle_dispatch.py" --resume-run C:\absolute\run
+```
 
-Use `chatgpt_oracle_comprehensive.py` for the bounded plan → optional
-Pro/Multi → review → implementation → final web gate flow. Each web stage
-writes the next mission; the host validates only UTF-8, identity, paths, and
-hashes. Use `chatgpt_oracle_multi.py` for independent solver sessions in waves
-of at most five and one merger over handoff files.
+The deterministic episode claim makes a repeated new-run command resolve to
+that same episode rather than submit again.
+
+Control state, Oracle output, and transcripts remain under
+`%USERPROFILE%\.codex\state\chatgpt-oracle`, outside the project. Use
+`chatgpt_oracle_comprehensive.py` for staged work and
+`chatgpt_oracle_multi.py` only for explicitly selected independent advisory
+sessions.

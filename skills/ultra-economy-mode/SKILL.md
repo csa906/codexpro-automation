@@ -1,6 +1,6 @@
 ---
 name: ultra-economy-mode
-description: Run 초절약모드 for expensive or long Codex tasks by keeping the local commander and every native subagent on exact gpt-5.6-luna with max reasoning, assigning architecture to qualified ChatGPT Pro, and moving implementation and review into separate web sessions. Use when the user says 초절약모드, Ultra Economy Mode, or explicitly requests a Luna Max local commander with web-first execution.
+description: Run expensive or long tasks with a Luna Max local commander, a Power 5 plan, and separate Oracle implementation and verification. Use when the user says 초절약모드, Ultra Economy Mode, or explicitly requests Luna Max web-first execution.
 ---
 
 # Ultra Economy Mode
@@ -49,7 +49,7 @@ artifact:
 
 ```text
 one-time exact-root qualification
-  -> qualified Pro design (read-only)
+  -> Power 5 plan/design (read-only)
   -> regular web design review and implementation-mission authoring
   -> regular web implementation and project tests
   -> separate regular web final verification or repair handoff
@@ -71,19 +71,38 @@ The local commander owns the one-time conversational activation handshake; the
 engine does not re-read or re-verify the task model at later stages. A manifest
 self-declaration is not a substitute for the handshake.
 
-The engine must fail closed before submission when the profile, Pro-first
-stage, exact root qualification, or minimum four-stage budget is missing. Do
-not substitute an attachment for readable DevSpace, and do not use Pro as the
-first connector-health probe.
+The engine must fail closed before submission when the profile, Power-5
+plan-first stage, exact root qualification, or minimum four-stage budget is
+missing. Do not use Power 5 as the first connector-health probe.
+
+Power is independent of stage authority. The Power 5 design stage remains
+read-only because it is `plan`; review is also read-only. Only an explicitly
+authorized implementation `edit`/`orchestrator` stage may write within the
+exact root using `apply_patch`, `bash`/shell commands, and tests. Preserve an
+explicit lower Power on ordinary later stages, and choose Power 5 automatically
+only when their complexity or importance warrants it. External or destructive
+actions still require separate authority.
+
+DevSpace is preferred at every stage. A deterministic, pre-submit,
+mutation-free DevSpace failure may automatically use mission-explicit hashed
+attachments while preserving the stage operation and selected Power. Generic
+attachment transport supports Power 1-5; `pro-attachment` is the legacy Power
+5 alias. For a write stage, require a structured patch for host SHA/path/scope
+validation, transactional apply under the exact-project mutex, local gate, and
+diff proof. After submission uncertainty or possible mutation, recover only
+the exact session; never fall back or submit a replacement.
 
 ## Failure and residual work
 
 - Recover only the exact persisted Oracle stage. Never create a replacement
-  submission from an ambiguous or possibly submitted failure.
+  submission from an ambiguous, possibly submitted, or possibly mutated
+  failure.
 - If web work reaches a genuine local-only boundary, give that one bounded
   residual task to a fresh Luna Max subagent, then return to a separate web
   verification stage when semantic review is still needed.
 - Do not repeat app/settings checks or endpoint probes after the project's
   exact-root qualification while the DevSpace config hash is unchanged.
-- Completion requires the final web PASS receipt and a zero-exit local
-  deterministic gate. Local Luna judgment is not release authority.
+- Completion requires the final web PASS receipt plus host proof of the actual
+  diff, changed-path scope, preserved unrelated WIP, and a zero-exit local
+  deterministic gate. Local Luna judgment or a web patch alone is not release
+  authority.

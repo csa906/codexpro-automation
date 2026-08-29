@@ -1,6 +1,6 @@
 ---
 name: chatgpt-question-designer
-description: Part of the current Oracle prompt-design path; use before submitting GPT/browser questions for answering, designing, debugging, reviewing, planning, researching, synthesizing, editing, or orchestration. Selects an explicit purpose-specific cognitive profile without collapsing every task into adversarial review.
+description: Design Oracle missions with an explicit cognitive role, operation authority, and independent Power 1-5 choice for answers, plans, reviews, research, edits, and orchestration.
 ---
 
 # ChatGPT Question Designer
@@ -24,7 +24,10 @@ remain separate actions.
 
 Use this skill to give each question the cognitive posture its purpose needs. Construction should remain constructive, research evidence-seeking, synthesis integrative, execution adaptive, and review adversarial.
 
-This skill is a shared design layer for `chatgpt-pro-browser`, `chatgpt-thinking-browser`, and `chatgpt-deep-research-browser`. It does not own browser execution, approval authority, or deterministic verification.
+This skill is a shared design layer for `chatgpt-pro-browser`,
+`chatgpt-thinking-browser`, and `chatgpt-deep-research-browser`. It chooses a
+cognitive role and reasoning budget but does not own browser execution,
+approval authority, or deterministic verification.
 
 ## Question Type
 
@@ -40,18 +43,36 @@ Classify the question before writing the prompt:
 
 Never infer `review` merely from `read-only`, `advisory`, `research`, or an unknown label. An explicit unknown manifest profile fails before submission. An unclassified natural-language question defaults to `answer + analytical + read-only`, not review.
 
-## Regular GPT Operation Mode Overlay
+## Operation mode and Power overlay
 
-For non-Pro regular `GPT` / `지피티` runs through `chatgpt-thinking-browser`, preserve the selected operation mode:
+Preserve the selected operation independently of Power:
 
 - `answer` is analytical, read-only, and directly answers the original request.
 - `review` / `검토모드` alone is adversarial. A blocker needs criterion, evidence, and impact; use `PASS`, `PASS_WITH_CONDITIONS`, `REVISE_LOCAL`, `REOPEN_DESIGN`, or `BLOCK` when the owning schema supports them.
 - `plan` / `계획모드` is constructive and read-only: reframe if useful, compare viable design families, choose one coherent path, and put risks last. Prior plans and reviews are nonbinding and hidden by default.
-- `edit` / `수정모드` performs `inspect -> edit -> test -> inspect result -> adapt`; it does not begin with a generic review.
-- `orchestrator` / `지휘` owns live workspace exploration, decisions, edits, tests, bounded adaptation, and every expensive strategy or implementation branch. When parallelism is useful, the one web GPT ExecutionMission partitions independent work into internal lanes or parallel tool calls and integrates them itself. Same-project web submissions stay serialized. Codex retains only submission/recovery, locks, hashes, exact browser identity, deterministic host-only verification, release, and irreversible boundaries; generic local tool-parallelism guidance never authorizes Codex to perform the delegated work locally.
+- An explicitly authorized `edit` / `수정모드` performs `inspect -> edit -> test
+  -> inspect result -> adapt` within the exact project root; it does not begin
+  with a generic review.
+- An explicitly authorized `orchestrator` / `지휘` owns bounded live-workspace
+  exploration, decisions, edits, tests, and adaptation within the exact root.
+  When parallelism is useful, the one web GPT ExecutionMission partitions and
+  integrates its own lanes. Same-project web submissions stay serialized.
+  Codex retains submission/recovery, mutexes, hashes, exact browser identity,
+  deterministic host verification, release, and irreversible boundaries.
 - `research` builds evidence; `synthesis` resolves candidates into a new coherent design. Neither is review.
 
-Use `codex.chatgpt.prompt-architecture/v3` receipts with orthogonal `task_kind`, `cognitive_frame`, `action_authority`, `context_policy`, `challenge_policy`, `output_contract`, `reasoning_budget`, and `decision_authority`. Local `AGENTS.md`, local skills, explicit no-write wording, and destructive-action boundaries outrank the overlay.
+Power 1-5 is an orthogonal reasoning budget. Power 5/Pro is available to
+`direct`, `plan`, `review`, `edit`, and `orchestrator`; `--mode pro` is only a
+`direct + Power 5` compatibility alias. Preserve an explicit power. Otherwise
+choose Power 5 automatically for complex or important work and an adequate
+lower power for ordinary work. Never infer write, external, or destructive
+authority from Power.
+
+Use `codex.chatgpt.prompt-architecture/v3` receipts with orthogonal `task_kind`,
+`cognitive_frame`, `action_authority`, `context_policy`, `challenge_policy`,
+`output_contract`, `reasoning_budget`, and `decision_authority`. Local
+`AGENTS.md`, local skills, explicit no-write wording, and destructive-action
+boundaries outrank the overlay.
 
 ## Prompt Contract
 
@@ -60,8 +81,12 @@ Every non-trivial GPT/browser question should include:
 1. `Goal`: what decision or artifact the answer should improve.
 2. `Original task`: preserve the user's request separately from any candidate artifact.
 3. `Cognitive profile`: answer, research, plan, review, edit, orchestrator, synthesis, or an explicit Web Multi role.
-4. `Evidence boundary`: list the live DevSpace workspace scope for regular GPT and qualified Pro, explicit frozen attachments only for `pro-attachment`, web/source constraints, freshness limits, and what cannot be inspected.
-5. `Action authority`: read-only, bounded workspace write, or mission-owned adaptive execution.
+4. `Evidence boundary`: list the exact DevSpace root, or the mission-explicit
+   frozen attachment paths and SHA-256 values when fallback is eligible, plus
+   web/source constraints, freshness limits, and what cannot be inspected.
+5. `Action authority`: read-only for answer/plan/review, or explicitly
+   authorized exact-root write for edit/orchestrator. Name any separate
+   external or destructive authority.
 6. `Confidence discipline`: separate evidence-backed findings, inference, speculation, and unknowns.
 7. `Answer shape`: compact sections; no vague approval; code-shaped output when code-oriented.
 
@@ -75,19 +100,35 @@ State material uncertainty and stay within the declared action and file scope.
 
 Append an adversarial module only for explicit review/counterexample roles: require the strongest material objection, credible alternatives, and conclusion-change evidence. Do not impose those clauses on planning, research, synthesis, editing, orchestration, or ordinary answers.
 
-## Transport and Evidence Context Rules
+## Transport and evidence context rules
 
 Context selection must match the question type.
 
-- New non-Pro direct, plan, review, edit, orchestrator, Deep Research, comprehensive, and Web Multi work uses Oracle plus the manually registered `DevSpace` workspace. The composer receives only `@DevSpace` and the absolute UTF-8 mission path. The mission tells GPT which project files, logs, tests, constraints, and artifacts to inspect through DevSpace.
-- Qualified Pro uses Oracle, `GPT-5.6 Sol` at the Pro effort, and read-only DevSpace at the exact project root. It begins with `read('.')` directory-list compatibility and may discover/read decision-relevant evidence broadly and adaptively, but may not write, edit, invoke a shell, or run commands. `pro-attachment` uses exact snapshot attachments only for immutable/external or DevSpace-unreadable evidence; it is never an automatic fallback.
+- New direct, plan, review, edit, orchestrator, comprehensive, and Web Multi work
+  prefers Oracle plus the manually registered `DevSpace` workspace at every
+  Power. The composer receives `@DevSpace`, the absolute UTF-8 mission path,
+  and the exact-workspace guard. Deep Research retains its own effort flow.
+- Power 5 uses the same DevSpace and mode authority as lower powers. Read-only
+  modes may inspect decision-relevant exact-root evidence broadly. Authorized
+  edit/orchestrator missions may use `apply_patch`, `bash`/shell, and tests
+  only in that root while preserving WIP and the project mutex.
 - CodexPro is frozen for new work. It may appear only while recovering an already persisted legacy agbrowse run; never design a new prompt around CodexPro `tree/search/read`, app registration, app repair, or a CodexPro fallback.
-- Code/design/debug/refactor: give the regular web GPT a narrow project-contained mission and let it inspect the live workspace through DevSpace. Do not duplicate the workspace into attachments or a ZIP.
+- Code/design/debug/refactor: give the web GPT a narrow project-contained
+  mission and let it inspect the live workspace through DevSpace.
 - Planning/review: identify the live draft, research, acceptance criteria, local guidance, and known risks by project-relative paths in the mission. Use an attachment packet only when the exact immutable snapshot is the requested evidence or DevSpace cannot read the artifact.
 - Investigation/source synthesis: identify internal findings and provenance in the DevSpace-visible mission, and use web/search separately for current public facts.
 - Idea expansion: put the seed, constraints, non-goals, audience, and known alternatives in the mission; do not preselect a conclusion.
 
-For a new DevSpace project task, a failed or unavailable endpoint blocks submission and routes only to `chatgpt-workspace-setup` diagnosis. It never authorizes CodexPro, ZIP, agbrowse, in-app Browser, Playwright/CDP, or `@chrome` fallback. `pro-attachment` requires its exact Oracle attachments; qualified Pro does not fall back to it automatically.
+A deterministic, pre-submit, mutation-free DevSpace failure may automatically
+use mission-explicit hashed attachments while preserving the mode, selected
+Power, exact root, and mission bytes. Generic attachment transport supports
+Power 1-5; `pro-attachment` is its legacy Power 5 compatibility alias. For a
+write mission, require a structured patch with exact paths and preimage hashes
+for host SHA/path validation, transactional apply under the project mutex,
+local gate, and final diff/scope proof. After submission uncertainty or any
+possible mutation, allow exact-session recovery only: no attachment fallback,
+fresh submission, alternate root, CodexPro, agbrowse, in-app Browser, or
+`@chrome` route.
 
 ## Oracle Continuity Rules
 
@@ -95,8 +136,14 @@ This skill designs the prompt packet; it must not erase local project question t
 
 - Every new Oracle stage is a one-shot session with its own exact slug. Do not add legacy `session_policy`, `session_affinity_key`, `inquiry_chain_id`, or `chat_url` fields to a new Oracle manifest.
 - Preserve semantic continuity in project-contained mission and handoff files. In comprehensive mode, the completing web stage writes the next stage's exact mission and receipt; local Codex validates bytes, paths, hashes, identity, and transition without rewriting its meaning.
-- Recovery uses only the stored exact Oracle slug with `harvest` or `live`. It never restarts, resubmits, or changes the model/reasoning level.
-- Genuine Web Multi uses distinct Oracle sessions and copied profiles for independent lanes. Use it only when simultaneous independent solvers materially help; never simulate multiple roles inside one session and never replace it with local Codex exploration.
+- Recovery uses only the stored exact Oracle slug with `harvest` or `live`. It
+  never restarts, resubmits, or changes the operation, model, Power, or
+  transport.
+- Genuine Web Multi uses distinct Oracle sessions and copied profiles for
+  independent lanes. Use it only when an advisory flow is explicitly selected
+  and simultaneous independent solvers materially help. Require
+  `WEB_MULTI_NEEDED` only in those explicit advisory flows, never in ordinary
+  Power 5 answers.
 - Local `AGENTS.md`, local skills, and task-specific question templates outrank the shared integrity contract. Preserve their answer shape and apply only compatible evidence and session metadata.
 - Independent approval, plan review, verifier, and release gates use fresh stages with explicitly scoped evidence.
 
@@ -105,8 +152,10 @@ This skill designs the prompt packet; it must not erase local project question t
 Before submission, check:
 
 - `one-sided context`: only the preferred plan or happy path is attached.
-- `missing negative evidence`: failures, logs, rejected alternatives, or user complaints are absent from the DevSpace-visible scope or Pro attachment packet.
-- `stale packet`: a Pro attachment no longer matches the current draft, diff, branch, or run.
+- `missing negative evidence`: failures, logs, rejected alternatives, or user
+  complaints are absent from the DevSpace-visible scope or attachment packet.
+- `stale packet`: an attachment no longer matches the current draft, diff,
+  branch, or run.
 - `too-broad packet`: a mission grants a broad workspace without an evidence map or question boundary.
 - `conclusion leakage`: prompt asks for approval before asking for objections.
 - `role collapse`: prompt asks one model to both invent and approve without counterexample pressure.

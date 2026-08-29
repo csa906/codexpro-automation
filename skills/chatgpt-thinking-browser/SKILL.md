@@ -1,74 +1,91 @@
 ---
 name: chatgpt-thinking-browser
-description: Run new regular ChatGPT direct, plan, review, edit, and orchestrator work through Oracle plus the manually registered DevSpace workspace app; use legacy agbrowse only to recover an exact persisted old run.
+description: Run new ChatGPT direct, plan, review, edit, and orchestrator missions through Oracle with independent Power 1-5 selection, preferred DevSpace access, and guarded attachment fallback.
 ---
 
-# Regular ChatGPT through Oracle + DevSpace
+# ChatGPT through Oracle
 
-Read `chatgpt-question-designer` first when shaping a new mission.
-
-For new work, create one absolute UTF-8 mission file inside the project and
-resolve the requested mode through:
+Read `chatgpt-question-designer` before shaping a new non-trivial mission. Put
+one absolute UTF-8 mission file inside the exact project root, then preview:
 
 ```powershell
-python "$env:USERPROFILE\.codex\bin\chatgpt_oracle_dispatch.py" --mode <direct|plan|review|edit|orchestrator> --project-root C:\project --mission-path C:\project\mission.md --manifest-output C:\project\.ai-bridge\oracle.json --reasoning-level "Very High" --dry-run
+python "$env:USERPROFILE\.codex\bin\chatgpt_oracle_dispatch.py" --mode <direct|plan|review|edit|orchestrator> --project-root C:\project --mission-path C:\project\mission.md --manifest-output C:\project\.ai-bridge\oracle.json --reasoning-level <Pro|Very-High|High|Medium|Low> --dry-run
 ```
 
-Remove `--dry-run` only for an explicitly authorized live web run. The runtime
-sends plain `@DevSpace` plus the absolute mission path. It never attaches files,
-opens ChatGPT settings, inspects/selects/deletes an app, or falls back to
-agbrowse, Playwright, in-app Browser, or Chrome.
+For `edit` or `orchestrator`, also pass `--fallback-contract` with a strict
+`codex.chatgpt.oracle-attachment-fallback/v1` JSON file. It must bind the same
+root, mission SHA-256, authority, and Power, enumerate every allowed edit path
+and operation with its preimage hash, and name one shell-free local gate whose
+first argv entry is the regular absolute executable (not a Store alias,
+symlink, or reparse point). The runtime binds that executable's SHA-256 and
+forbids editing a gate input.
 
-`orchestrator` is a single web submission that carries the orchestrator
-ownership contract: that one GPT session owns delegated exploration, code
-authoring, tests, and internal parallel lanes, and its answer is the result.
-It has no stages, no stage receipts, and no local gate. Do not confuse it with
-comprehensive mode, which is a multi-stage workflow owned by
-`chatgpt-pro-plan-handoff` and `bin/chatgpt_oracle_comprehensive.py`.
-Comprehensive mode runs `orchestrator`-equivalent work as its implementation
-stage, so it contains this mode rather than competing with it.
+Remove `--dry-run` only for an explicitly authorized live web run. Oracle
+selects `GPT-5.6 Sol` and proves the requested visible Power before prompt send.
+Power 5/Pro is available to every listed operation mode; `--mode pro` remains a
+compatibility alias for `direct` plus Power 5. Choose Power 5 automatically for
+complex or important work, while preserving explicit or adequate lower powers
+for ordinary work. Power never grants authority.
 
-Choose `orchestrator` when the goal and approach are already settled and one
-authorized execution pass should finish the work at the lowest cost. Choose
-comprehensive mode when the plan itself needs an independent review stage,
-when Pro or Web Multi must participate, or when completion must be proven by a
-deterministic local gate.
+## Operation authority
 
-CodexPro is frozen for new work. Never mention it in a new mission, probe its
-endpoint, repair/register/delete its app, or use it as a DevSpace fallback.
+- `direct`/answer, `plan`, and `review` are read-only regardless of Power.
+- An explicitly authorized `edit` or `orchestrator` mission may inspect, write
+  within the exact root, use `apply_patch` and `bash`/shell commands, and run
+  tests.
+- External, publishing, destructive, credential, or out-of-root actions require
+  separate explicit authority.
 
-Oracle explicitly selects `GPT-5.6 Sol` and `extra-high`, verifies the visible
-`Extra High` tier before prompt send, and records both in Oracle evidence. The exact 0.17.1
-compatibility layer is hash-gated and fails closed on an unknown version or
-third-party file. Never invent xhigh or silently downgrade.
+`orchestrator` is one web submission that owns its mission's bounded
+exploration, decisions, edits, tests, and adaptation. Comprehensive mode is a
+separate multi-stage workflow owned by `chatgpt-pro-plan-handoff`; use it when
+the plan or implementation needs independent stages and a final local gate.
 
-On the current Power-slider UI, Oracle verifies `Power 4 of 5` for regular
-`extra-high`; attachment-only Pro uses the same verified `GPT-5.6 Sol` model
-with `Power 5 of 5` (the visible `Pro` choice). `heavy` is only Oracle's
-internal compatibility token for that latter choice, never a claimed UI label.
+Authorized writers hold the exact-project mutex for the mission, preserve
+unrelated WIP and declared exclusions, and never broadly stage, reset, stash,
+clean, or overwrite another writer's changes. Completion requires host proof
+of the actual diff, changed-path scope, preserved WIP, and the declared local
+gate, not only a web answer.
 
-Every new run copies the manually signed-in Oracle profile into a throwaway
-per-run profile and asks Oracle to hide its owned window. This isolates
-different projects: one completed run cannot close another run's live Chrome.
-Do not replace this with the shared manual-login profile.
+## DevSpace and attachment fallback
 
-Control state and final Oracle output are host-only below
-`%USERPROFILE%\.codex\state\chatgpt-oracle`. Complete requires exit zero and
-fresh nonempty host output. Recovery uses the stored slug:
+DevSpace is preferred at every Power. The runtime sends `@DevSpace`, the
+absolute mission path, and the exact-workspace guard. It does not automate the
+app picker or settings and never substitutes another root. CodexPro and
+agbrowse are frozen for exact persisted-run recovery only.
+
+Only a deterministic, pre-submit, mutation-free DevSpace failure may
+automatically use mission-explicit attachment transport. Freeze every attached
+file and SHA-256, preserve the selected operation and Power, and never infer a
+project packet from prose. `pro-attachment` is the legacy Power 5 alias; generic
+attachment transport may preserve Power 1-5.
+
+For a write mission, the attachment result is a structured patch. The host
+validates its exact paths and preimage hashes, applies it transactionally under
+the project mutex, runs the local gate, and checks the resulting diff/scope.
+After submission uncertainty or any possible mutation, do not fall back or
+submit again; recover the exact session only.
+
+## Session and recovery
+
+Every new run uses a throwaway copy of the manually signed-in Oracle profile
+and an Oracle-owned hidden window. Control state and output stay host-only under
+`%USERPROFILE%\.codex\state\chatgpt-oracle`.
+
+Recover using the stored slug:
 
 ```powershell
 python "$env:USERPROFILE\.codex\bin\chatgpt_oracle_run.py" recover --run-dir C:\exact\host-run --action harvest
+python "$env:USERPROFILE\.codex\bin\chatgpt_oracle_dispatch.py" --resume-run C:\exact\host-run
 ```
 
-Recovery never restarts/resubmits and never downgrades durable COMPLETE. If the
-persisted CDP endpoint died, Oracle may launch a bounded recovery browser from
-the run's recorded profile seed and open only that slug's exact persisted
-conversation URL for harvest. It must not use a prompt or create a replacement
-conversation. Session authority is monotonic: a later `running` observation
-cannot downgrade `terminal_observed`. That disagreement remains
-attention-required with the same project lock; a later exact terminal harvest
-with fresh nonempty output settles it to COMPLETE.
+Recovery never restarts/resubmits, changes Power or transport, or downgrades a
+durable COMPLETE result. If needed, a bounded recovery browser may open only
+that slug's persisted conversation URL. A later `running` observation cannot
+erase terminal evidence; disagreement remains attention-required until a fresh
+exact terminal harvest settles it. For dispatcher-owned runs, the second
+command resumes only the persisted host diff/gate or patch-apply phase from its
+hash-bound baseline; it never creates a browser submission.
 
-For an already persisted agbrowse run only, use its exact legacy
-`chatgpt_agbrowse_run.py --observe-run|--recover-run <run-dir>` command. Do not
-create a new agbrowse run.
+For an already persisted agbrowse/CodexPro run only, use its exact legacy
+recovery command. Never create a new legacy run.

@@ -107,7 +107,13 @@ ChatGPT 앱 `codex` 등록은 준비가 끝난 뒤 **최초 한 번 수동 등�
 | PC 로컬 자문·반례 탐색 | Local Multi-GPT | 선택 설치, Luna Max, 읽기 전용 |
 | 계획부터 최종 gate까지 | comprehensive mode | 단계별 웹 워크플로 |
 | 로컬 비용 최소화 | `ultra-economy` | Luna Max 지휘 + 분리 웹 단계 |
-| 독립 최종 판단 | `pro` | GPT-5.6 Sol Pro + 읽기 전용 DevSpace |
+| Power 5 단일 실행 | `pro` 호환 별칭 또는 명시 모드 + `Pro` | 모드 권한 + GPT-5.6 Sol Power 5 |
+
+Power 1-5는 권한이 아니라 추론 수준입니다. `direct`·`plan`·`review`는 어느
+Power에서도 읽기 전용이고, 명시적으로 승인된 `edit`·`orchestrator`는 Power
+5에서도 정확한 프로젝트 root 안에서 수정과 테스트를 수행할 수 있습니다.
+DevSpace가 제출 전에 확정적으로 불가능하고 workspace 무변경이 증명된 경우에만
+같은 Power의 해시 결박 첨부 폴백을 한 번 사용합니다.
 
 자세한 선택 기준은 [전역 라우팅](docs/GLOBAL_CHATGPT_ROUTING.md), 초절약모드는
 [초절약모드 가이드](docs/ULTRA_ECONOMY_MODE.md)를 참고하세요.
@@ -122,17 +128,21 @@ python "$env:USERPROFILE\.codex\bin\chatgpt_oracle_dispatch.py" `
   --project-root C:\project `
   --mission-path C:\project\mission.md `
   --manifest-output C:\project\.ai-bridge\oracle.json `
-  --reasoning-level "Very High" `
+  --reasoning-level Pro `
+  --fallback-contract C:\project\.ai-bridge\fallback-contract.json `
   --dry-run
 ```
 
-실제 실행 승인이 있을 때만 `--dry-run`을 제거합니다.
+쓰기 모드는 `fallback-contract.json`에 허용 edit path, preimage SHA-256, 허용
+operation과 local gate를 명시해야 합니다. 실제 실행 승인이 있을 때만
+`--dry-run`을 제거합니다.
 
 ## 안전 계약
 
 - 프로젝트마다 활성 또는 불확실한 Oracle 작업은 하나만 둡니다.
 - 새 프로젝트의 첫 DevSpace 제출 전에 exact root 등록을 확인합니다.
-- Pro는 기본적으로 read-only이며 쓰기·셸·명령 실행을 허용하지 않습니다.
+- Power는 권한을 바꾸지 않습니다. 명시적으로 승인된 `edit` 또는
+  `orchestrator` 임무만 exact root 안에서 쓰기·셸·명령 실행을 허용합니다.
 - 제출 후 오류는 기존 실행 신원으로 정확히 복구하며, 저장된 slug와 대화
   URL만 회수하고 자동 재제출하지 않습니다.
 - 브라우저나 로컬 프로세스 종료만으로 웹 작업 실패를 판정하지 않습니다.

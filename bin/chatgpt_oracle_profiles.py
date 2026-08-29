@@ -16,11 +16,13 @@ from pathlib import Path
 from typing import Any
 
 
-REGULAR_REASONING_LEVELS = ("Very High", "High", "Medium")
+REGULAR_REASONING_LEVELS = ("Pro", "Very High", "High", "Medium", "Low")
 REGULAR_THINKING_TIME = {
+    "Pro": "heavy",
     "Very High": "extra-high",
     "High": "extended",
     "Medium": "standard",
+    "Low": "light",
 }
 _CONFIG_SPEC = importlib.util.spec_from_file_location(
     "chatgpt_oracle_profiles_workspace_config",
@@ -35,7 +37,13 @@ DEVSPACE_APP_NAME = WORKSPACE_CONFIG.DEFAULT_APP_NAME
 # separate model row.  Oracle 0.17.1 verifies that Pro effort independently.
 PRO_MODEL = "gpt-5.6-sol"
 PRO_COMPOSER_PROMPT = "Read the attached prompt/instructions and all attached files, then complete the task."
-PRO_READONLY_COMPOSER_PREFIX = "Read the read-only mission file"
+POWER5_COMPATIBILITY_ALIASES = {
+    "pro",
+    "gpt-pro",
+    "pro-readonly",
+    "pro_readonly",
+    "pro readonly",
+}
 
 
 class OracleProfileError(ValueError):
@@ -66,17 +74,12 @@ _PROFILES = {
     "orchestrator": OracleModeProfile("orchestrator", "orchestrator", True, True),
     "deep-research": OracleModeProfile("deep-research", "deep-research", True, True, research=True),
     "manual": OracleModeProfile("manual", "manual", False, False),
-    "pro": OracleModeProfile("pro", "pro", True, True),
-    "pro-attachment": OracleModeProfile("pro-attachment", "pro", True, False),
+    "attachment": OracleModeProfile("attachment", "direct", True, False),
+    "pro-attachment": OracleModeProfile("pro-attachment", "direct", True, False),
 }
 _ALIASES = {
     "deep_research": "deep-research",
     "deep research": "deep-research",
-    "pro": "pro",
-    "gpt-pro": "pro",
-    "pro-readonly": "pro",
-    "pro_readonly": "pro",
-    "pro readonly": "pro",
     "pro_attachment": "pro-attachment",
     "pro attachment": "pro-attachment",
 }
@@ -84,7 +87,7 @@ _ALIASES = {
 
 def _normalize_mode(value: str) -> str:
     requested = str(value or "").strip().casefold()
-    normalized = _ALIASES.get(requested, requested)
+    normalized = "direct" if requested in POWER5_COMPATIBILITY_ALIASES else _ALIASES.get(requested, requested)
     if normalized not in _PROFILES:
         raise OracleProfileError("MODE_UNSUPPORTED", "Oracle mode is not supported", {"requested": value, "supported": list(_PROFILES)})
     return normalized
@@ -104,16 +107,20 @@ def _absolute_mission_path(value: str | Path | None) -> Path:
     return path.resolve(strict=False)
 
 
-def _resolve_reasoning(requested: str | None) -> str:
+def _resolve_reasoning(requested: str | None, *, default: str = "Very High") -> str:
     if requested is None or not str(requested).strip():
-        return REGULAR_REASONING_LEVELS[0]
+        return default
     normalized = str(requested).strip().casefold()
+    if normalized in {"pro", "power 5", "power-5", "power5", "최고", "프로"}:
+        return "Pro"
     if normalized in {"very high", "very-high", "extra high", "extra-high", "xhigh", "매우 높음"}:
         return "Very High"
     if normalized in {"high", "높음"}:
         return "High"
     if normalized in {"medium", "중간"}:
         return "Medium"
+    if normalized in {"low", "light", "instant", "낮음"}:
+        return "Low"
     raise OracleProfileError(
         "REGULAR_REASONING_UNAVAILABLE",
         "requested regular reasoning level is unavailable; no downgrade was made",
@@ -129,16 +136,6 @@ def composer_handoff(mission_path: str | Path, app_name: str | None = None) -> s
         "Use only the exact project root recorded there; read the mission and applicable AGENTS.md fully first. "
         "If workspace opening times out, retry that same exact root once; never substitute a parent, child, active "
         "workspace, or shell boundary workaround."
-    )
-
-
-def pro_readonly_composer_handoff(mission_path: str | Path, app_name: str | None = None) -> str:
-    """The qualified Pro read-only DevSpace handoff, with no attachments."""
-    mission = _absolute_mission_path(mission_path)
-    return (
-        f"@{WORKSPACE_CONFIG.normalize_app_name(app_name or WORKSPACE_CONFIG.configured_app_name())} {PRO_READONLY_COMPOSER_PREFIX}: {mission}. "
-        "Use only the exact project root recorded there; read the mission and applicable AGENTS.md fully first. "
-        "Perform read-only work only; do not modify files, settings, accounts, or external state."
     )
 
 
@@ -166,10 +163,13 @@ def build_launch_contract(
 ) -> dict[str, Any]:
     """Build an immutable, browser-agnostic launch contract for parent runners.
 
-    `manual` intentionally produces a non-launch contract. The default Pro
-    route uses DevSpace; the explicit pro-attachment mode preserves the
-    attachment-only transport for frozen external evidence.
+    `manual` intentionally produces a non-launch contract. Power is orthogonal
+    to the operation mode: Pro/Power 5 uses the same DevSpace and mission
+    authority as lower powers. Attachment-only is a transport fallback that
+    preserves the selected power; `pro-attachment` is its Power 5 alias.
     """
+    requested_mode = str(mode or "").strip().casefold()
+    power5_compatibility_alias = requested_mode in POWER5_COMPATIBILITY_ALIASES
     profile = resolve_profile(mode)
     resolved_app_name = WORKSPACE_CONFIG.normalize_app_name(
         app_name or WORKSPACE_CONFIG.configured_app_name()
@@ -195,44 +195,27 @@ def build_launch_contract(
         })
         return result
     mission = _absolute_mission_path(mission_path)
-    if profile.mode == "pro-attachment":
+    if profile.mode in {"attachment", "pro-attachment"}:
         attachments = _attachment_paths(attachment_paths)
         if mission not in attachments:
             attachments.insert(0, mission)
         if not attachments:
             raise OracleProfileError("PRO_ATTACHMENTS_REQUIRED", "Pro requires at least one exact attachment")
+        reasoning = _resolve_reasoning(
+            "Pro" if profile.mode == "pro-attachment" else reasoning_level,
+        )
         result.update({
-            "route": "oracle-pro-attachment-only",
+            "route": "oracle-attachment-only",
             "app_policy": "forbidden",
             "attachment_policy": "always",
             "attachments": [str(path) for path in attachments],
             "model": PRO_MODEL,
-            "reasoning_level": "Pro",
-            # `heavy` is Oracle's compatibility token for the current
-            # account-visible Pro power tier.  Keep it explicit so parent
-            # runners cannot fall back to the regular Extra High default.
-            "thinking_time": "heavy",
+            "model_strategy": "select",
+            "reasoning_level": reasoning,
+            "thinking_time": REGULAR_THINKING_TIME[reasoning],
             "mission_path": str(mission),
             "composer_prompt": PRO_COMPOSER_PROMPT,
-        })
-        return result
-    if profile.mode == "pro":
-        if attachment_paths:
-            raise OracleProfileError(
-                "PRO_READONLY_ATTACHMENTS_FORBIDDEN",
-                "Pro read-only DevSpace runs must not attach files",
-            )
-        result.update({
-            "route": "oracle-pro-devspace-readonly",
-            "app_policy": "prompt-mention-only",
-            "attachment_policy": "forbidden",
-            "app_name": resolved_app_name,
-            "model": PRO_MODEL,
-            "model_strategy": "select",
-            "reasoning_level": "Pro",
-            "thinking_time": "heavy",
-            "mission_path": str(mission),
-            "composer_prompt": pro_readonly_composer_handoff(mission, resolved_app_name),
+            "compatibility_alias": "pro-attachment" if profile.mode == "pro-attachment" else None,
         })
         return result
     if attachment_paths:
@@ -240,18 +223,27 @@ def build_launch_contract(
             "REGULAR_ATTACHMENTS_FORBIDDEN",
             "non-Pro Oracle modes use DevSpace and must not attach files",
         )
-    reasoning = _resolve_reasoning(reasoning_level)
+    default_reasoning = "Pro" if profile.mode == "orchestrator" else "Very High"
+    reasoning = _resolve_reasoning(
+        "Pro" if power5_compatibility_alias else reasoning_level,
+        default=default_reasoning,
+    )
+    if profile.research and reasoning == "Pro":
+        raise OracleProfileError(
+            "DEEP_RESEARCH_POWER_UNAVAILABLE",
+            "Deep Research owns its effort flow and cannot claim a Power 5 slider selection",
+        )
     result.update({
         "route": "oracle-devspace",
         "app_policy": "prompt-mention-only",
         "app_name": resolved_app_name,
+        "model": PRO_MODEL,
+        "model_strategy": "select",
         "reasoning_level": reasoning,
-        # Oracle 0.17.1 keeps `extra-high` distinct from the separate Pro
-        # effort. Keep this in the mode contract so dispatch cannot silently
-        # turn a requested High run into Extra High or Pro.
         "thinking_time": REGULAR_THINKING_TIME[reasoning],
         "mission_path": str(mission),
         "composer_prompt": composer_handoff(mission, resolved_app_name),
+        "compatibility_alias": "pro" if power5_compatibility_alias else None,
     })
     return result
 

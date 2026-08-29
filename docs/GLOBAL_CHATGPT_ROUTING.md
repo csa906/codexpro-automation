@@ -11,30 +11,30 @@ Use this routing in the Codex global `AGENTS.md` after installing the package.
 - New regular ChatGPT work, including direct, plan, review, edit,
   orchestrator, research, comprehensive, and Web Multi-GPT, uses Oracle plus
   the manually registered DevSpace app.
-- Regular web work selects `GPT-5.6 Sol` with Oracle `extra-high`, verifies
-  the visible `Extra High` tier, and requires Power 4/5. `heavy` is a
-  compatibility token reserved for
-  `GPT-5.6 Sol` Power 5/5 Pro, never the regular thinking setting. It does not
-  silently fall back to High or another model.
+- Web work selects exact `GPT-5.6 Sol`. Power 1-5 map to Oracle `light`,
+  `standard`, `extended`, `extra-high`, and `heavy`. Preserve an explicit
+  choice; otherwise use Power 5 for complex or important work and an adequate
+  lower Power for ordinary work. Power changes reasoning depth, not authority.
 - The regular composer contains only `@DevSpace` and an absolute UTF-8 mission
   path. It does not attach the task body and does not inspect or mutate ChatGPT
   app settings per question.
-- Qualified Pro also uses Oracle, `GPT-5.6 Sol` at the Pro effort, and the
-  manually registered DevSpace app in read-only mode. It binds the exact
-  project root and begins broad, adaptive discovery with `read('.')` directory
-  listing compatibility; it may inspect all decision-relevant project evidence
-  without a narrow per-run allowlist, but may not write, edit, invoke shell, or
-  run commands. One-time app qualification is sufficient: do not inspect app
-  settings or picker state per run.
-- Qualified Pro output uses the v1 task-outcome marker. Exit zero and a durable
-  answer do not count as success when DevSpace exposed no callable tools or the
-  exact mission/root was unread. A durably terminal `NOT_EXECUTED` run may
-  release its project lock for one fresh retry with identical mission bytes;
-  repeated tool absence is `attention_required`, not an automatic app-settings
-  repair or attachment fallback.
-- Explicit `pro-attachment` is attachment-only and is available only for
-  immutable/external evidence or artifacts unreadable through DevSpace. It is
-  not a fallback from a qualified Pro DevSpace run.
+- Power 5 uses the same operation authority as every other Power. `direct`,
+  `plan`, and `review` remain read-only; explicitly authorized `edit` and
+  `orchestrator` runs may edit and test only inside the exact project root.
+  `--mode pro` is the `direct + Power 5` compatibility alias.
+- All DevSpace output uses the v1 task-outcome marker. Exit zero and a durable
+  answer do not count as execution when required tools or the exact root were
+  unavailable. Provider prose never establishes mutation-free retry authority.
+- Generic attachment transport preserves Power 1-5. `pro-attachment` is its
+  Power 5 compatibility alias. The one-shot dispatcher may select it
+  automatically only after a structured deterministic pre-submit DevSpace
+  failure plus unchanged-workspace proof. Its immutable contract binds every
+  evidence/edit path, SHA-256, and local gate.
+- A write fallback returns a strict structured patch for host-side validation
+  and transactional exact-root application. Direct DevSpace writes and
+  host-applied patches both require actual diff/scope and a zero-exit local
+  gate. Once submission or mutation is possible, only exact-slug recovery is
+  allowed.
 - Existing persisted agbrowse runs remain recovery-only. There is no new
   agbrowse submission path and no Oracle-to-agbrowse fallback.
 - Comprehensive stages author the next semantic mission and a bound hash
@@ -58,14 +58,11 @@ Use this routing in the Codex global `AGENTS.md` after installing the package.
 
 ## Standalone Pro versus comprehensive
 
-`chatgpt-pro-browser` is the visible standalone Pro skill. It submits one
-qualified, read-only DevSpace Pro session by default, saves the durable result,
-returns it to the calling Codex task, and stops. An explicit `pro-attachment`
-contract may be used only for its stated evidence boundary. It never starts
-implementation or a comprehensive review-to-implementation chain. Its required
-`WEB_MULTI_NEEDED` decision may start the ready-to-run advisory Web Multi stage
-after the exact Pro session is terminal; that advisory still returns to the
-calling Codex task rather than implementing.
+`chatgpt-pro-browser` is the visible one-shot Power 5 skill. The selected mode
+owns authority, so an explicit `edit` or `orchestrator` may write while
+`direct`, `plan`, and `review` remain read-only. It saves one durable result and
+stops; ordinary Power 5 runs do not require `WEB_MULTI_NEEDED`. That decision
+appears only in an explicitly selected advisory Web Multi flow.
 
 `chatgpt-pro-plan-handoff` owns comprehensive mode. Only that staged runner may
 place an optional Pro decision between plan and review and continue afterward

@@ -1,6 +1,6 @@
 interface:
   display_name: "ChatGPT Pro Browser"
-  short_description: "Run one-shot read-only DevSpace Pro review through Oracle"
-  default_prompt: "$chatgpt-pro-browser C:\\project\\pro-mission.md"
+  short_description: "Run one-shot Oracle work at Power 5 with scoped authority"
+  default_prompt: "Use $chatgpt-pro-browser to run this mission at Power 5 through Oracle."
 policy:
   allow_implicit_invocation: true

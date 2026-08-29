@@ -1,134 +1,101 @@
 ---
 name: chatgpt-pro-browser
-description: Use for a one-shot ChatGPT Pro plan, research, or review through Oracle. Qualified Pro uses read-only DevSpace; `pro-attachment` is an explicit immutable-evidence route. Return the Pro result only.
+description: Use for one-shot Oracle work at Power 5/Pro. Power is reasoning effort, while the selected direct, plan, review, edit, or orchestrator mode owns authority and completion.
 ---
 
-# ChatGPT Pro through Oracle
+# ChatGPT Power 5 through Oracle
 
 ## Standalone scope
 
-This is the standalone, one-shot Pro route. It may produce a plan, research
-finding, review, or decision, but it returns that durable Pro result to Codex
-and stops. It never starts a review-to-implementation chain, authors a
-follow-on implementation stage, or invokes `chatgpt-pro-plan-handoff` on its
-own. If the user asks for comprehensive mode, use `chatgpt-pro-plan-handoff`
-instead.
+This is the one-shot Power 5 route. It returns one durable result and stops; it
+does not start comprehensive staging or implementation on its own. Use
+`chatgpt-pro-plan-handoff` only when the user requests the staged workflow.
 
-Oracle is the only backend for a new Pro run. There is no new agbrowse,
-CodexPro, in-app Browser, custom CDP/Playwright, or `@chrome` fallback.
+Oracle is the only backend for a new run. CodexPro and agbrowse are exact
+persisted-run recovery paths only; do not substitute another model or browser.
 
-## Qualified default route
+## Power and authority
 
-Qualified Pro uses Oracle with `GPT-5.6 Sol` at the Pro effort and the
-manually registered DevSpace app in read-only mode. The mission must bind one
-exact absolute project root. After one-time qualification, do not inspect,
-register, repair, select, or otherwise verify ChatGPT app/settings state on
-each run.
+Power 5/Pro is the maximum reasoning level for the same `GPT-5.6 Sol` model,
+not a separate operation or permission mode. It is available to `direct`,
+`plan`, `review`, `edit`, and `orchestrator`:
 
-Before the first qualified Pro submission for a new project, the local runner
-must verify that the normalized exact root is present in DevSpace
-`allowedRoots`. A parent, child, or similarly named root is not sufficient.
-The result is cached by exact config hash, so later questions in the same
-project do not repeat endpoint/read probes; a changed config is revalidated.
-Failure returns `DEVSPACE_EXACT_ROOT_UNAVAILABLE` before Oracle or a browser is
-created and points to the complete root-preserving setup preview.
+- `direct`/answer, `plan`, and `review` are read-only.
+- An explicitly authorized `edit` or `orchestrator` mission may write only in
+  its exact project root and may use `apply_patch`, `bash`/shell commands, and
+  tests.
+- External side effects, publishing, destructive actions, and writes outside
+  the exact root require separate explicit authority.
 
-Pro reads the mission and applicable `AGENTS.md` chain completely, then begins
-with the `read('.')` directory-list compatibility call. It may discover and
-read broadly and adaptively within that exact root: current Git state, project
-rules, mission artifacts, source and configuration, failures, logs, prior
-decisions, tests, and results whenever they are decision-relevant. A narrow
-preselected evidence allowlist is not required and must not conceal relevant
-contradictory evidence.
+`--mode pro` is a compatibility alias for `--mode direct --reasoning-level
+Pro`; it does not grant write authority. Prefer an explicit operation mode plus
+Power 5 when the distinction matters.
 
-Read-only is absolute: Pro must not write or edit files, invoke a shell, or run
-commands. It may not substitute a parent, child, similarly named, active, or
-shell-boundary workspace. It may retry only the same root once after a timeout.
+## Preferred DevSpace route
 
-## Explicit attachment route
+DevSpace is preferred at every power. Bind one exact absolute project root,
+read the mission and applicable `AGENTS.md` chain completely, and begin with
+the `read('.')` directory-list compatibility call. Read-only missions may
+inspect decision-relevant material broadly. Authorized write missions preserve
+unrelated WIP, the exact-project mutex, and the declared write scope; they must
+not broadly stage, reset, stash, clean, or overwrite another writer's changes.
 
-`pro-attachment` is attachment-only through Oracle. Use it only when the
-question depends on immutable/external evidence or artifacts that DevSpace
-cannot read. Its mission and every attachment are exact regular non-symlink
-files with frozen SHA-256 values. It is an explicit evidence contract, never an
-automatic fallback from qualified Pro DevSpace.
+Before the first DevSpace submission for a root, verify exact equality against
+`allowedRoots` and cache it by config hash. Do not substitute a parent, child,
+similarly named, or active workspace, and do not repeat app/settings checks
+while the cached config is unchanged.
 
-Build this route with the repository's
-`scripts/build_project_context_packet.py` helper. Preview and validate the
-packet before launch, preserve the generated manifest and hashes, and attach
-only the mission plus the explicitly frozen evidence packet. Do not scrape
-the project into an ad-hoc ZIP or infer attachments from prose.
+## Attachment compatibility and fallback
 
-## Required Web Multi decision
+`pro-attachment` is the legacy Power 5 compatibility alias for the generic
+attachment transport. Attachment transport may preserve any selected Power
+1-5; it is not inherently Pro and grants no extra authority.
 
-Every standalone Pro result ends with this exact decision block:
+A deterministic DevSpace failure may automatically use attachment transport
+only when it is proven pre-submit and mutation-free. The mission must explicitly
+name every regular non-symlink attachment and freeze its SHA-256; use the
+repository context-packet helper rather than an ad-hoc project scrape. Preserve
+the selected operation mode, power, exact root, and mission bytes.
 
-```text
-WEB_MULTI_NEEDED: YES|NO
-WEB_MULTI_REASON: evidence-based reason tied to the decision and alternatives
-```
+For a read-only mission, the attachment result is the answer. For an authorized
+write mission, the web session returns a structured patch with exact relative
+paths and preimage hashes. The host validates SHA/path/scope, applies it
+transactionally inside the exact root, runs the declared local gate, and
+rechecks the resulting diff. The attachment session never claims it wrote the
+workspace.
 
-Pro chooses `YES` only when three to five materially independent regular GPT
-sessions are likely to add decision-relevant alternatives or evidence. Their
-mission carries the same project maximum-context evidence and the durable Pro answer,
-assigns stable lane order, and synthesis/judge criteria. After a durable Pro
-answer says `WEB_MULTI_NEEDED: YES`, Codex starts that ready-to-run Web Multi-GPT Very
-High mission automatically without a routine user
-choice. It waits for the exact Pro session to be terminal first and preserves
-the same-project serialization contract. Choose `NO` for a trivial, single-answer, or purely mechanical question. This optional advisory handoff
-does not turn the standalone Pro result into a review-to-implementation chain.
+After prompt submission, any uncertainty or observed/possible mutation permits
+only exact-session recovery. It never authorizes attachment fallback or a
+fresh submission.
 
-## Preflight and completion
+## Run and completion
 
-1. Resolve and hash-validate the tested Oracle compatibility contract.
-2. Bind the same normalized-project mutex used by regular Oracle work.
-3. Build a short UTF-8 mission that states the exact root, question,
-   read-only authority, and any evidence limitations. For `pro-attachment`,
-   freeze the required attachments and their hashes instead.
-4. Use a fresh Oracle slug and require Oracle model and transport evidence
-   before accepting a send.
-
-The public dispatcher entry points are:
+Preview the explicit mode and Power 5 contract before a live run:
 
 ```powershell
+python "$env:USERPROFILE\.codex\bin\chatgpt_oracle_dispatch.py" --mode direct --reasoning-level Pro --project-root <ROOT> --mission-path <MISSION> --manifest-output <MANIFEST> --dry-run
 python "$env:USERPROFILE\.codex\bin\chatgpt_oracle_dispatch.py" --mode pro --project-root <ROOT> --mission-path <MISSION> --manifest-output <MANIFEST> --dry-run
+python "$env:USERPROFILE\.codex\bin\chatgpt_oracle_dispatch.py" --mode edit --reasoning-level Pro --project-root <ROOT> --mission-path <MISSION> --fallback-contract <FALLBACK_CONTRACT_JSON> --manifest-output <MANIFEST> --dry-run
 python "$env:USERPROFILE\.codex\bin\chatgpt_oracle_dispatch.py" --mode pro-attachment --project-root <ROOT> --mission-path <MISSION> --attachment <PACKET> --manifest-output <MANIFEST> --dry-run
 ```
 
-Remove `--dry-run` only after the manifest, project mutex, Oracle version, and
-compatibility hashes pass preflight. The default `pro` command never accepts
-attachments; `pro-attachment` never invokes DevSpace.
-
-Completion requires the requested Pro model/effort evidence, exit zero, fresh
-nonempty host-only `output.md`, immutable run identity, and a refreshed
-transcript. The final nonempty line must also be
-`TASK_OUTCOME: EXECUTED|NOT_EXECUTED|BLOCKED`; every citation, footnote, and
-Markdown reference definition belongs before it. For bounded compatibility
-with provider-rendered answers, the classifier also accepts exactly one marker
-followed solely by single-line HTTP(S) Markdown reference definitions. Ordinary
-trailing prose or another marker remains `unknown`. A terminal answer that reports
-zero callable DevSpace tools or says the mission/root could not be read is
-`NOT_EXECUTED`, never successful Pro work. When that exact terminal run is
-durably captured, it releases same-project ownership and permits at most one
-fresh retry with the same mission bytes and SHA-256. If the retry has the same
-tool-exposure failure, stop with `attention_required`; do not loop, manipulate
-ChatGPT app settings, or switch to attachments automatically. A nonzero exit
-after submission is `attention_required`, not proof that the web session
-failed.
-
-## Recovery
+Remove `--dry-run` only after validating the manifest, immutable mission,
+selected model/power, exact-project mutex, and compatibility hashes. Completion
+always requires a durable nonempty host output and exact model/power evidence.
+An authorized write mission additionally requires host-side diff, path/scope,
+and declared local-gate proof; a provider success marker alone is insufficient.
+The write fallback contract is mandatory and uses schema
+`codex.chatgpt.oracle-attachment-fallback/v1`; it explicitly binds allowed
+paths/operations, preimage hashes, evidence hashes, and the shell-free gate.
 
 Recover only the stored exact Oracle run directory and slug. `live` and
-`harvest` may observe or collect that same session; they never restart,
-resubmit, change route/model/effort, or create a replacement conversation.
+`harvest` may observe or collect that session; they never restart, resubmit,
+change route/model/power, or create a replacement conversation. Already
+persisted legacy agbrowse/CodexPro runs retain only their exact recovery tools.
+After a dispatcher run becomes terminal, run `chatgpt_oracle_dispatch.py
+--resume-run <RUN_DIR>` to resume its persisted host-only diff/gate or patch
+phase. That command cannot submit a prompt.
 
-When Oracle 0.17.1 reports the exact prompt-not-observed timeout, first run
-exact-slug harvest. No live tab plus no recoverable conversation URL remains
-submission-uncertain and needs explicit user confirmation before the
-hash-bound `settle-no-submission` path can release a standalone qualified-Pro
-run. Only then may an explicitly authorized single retry reuse the identical
-mission bytes; no output, URL, mismatched hash, conflicting recovery state, or
-ordinary trailing browser error may be treated as proof.
-
-For an already persisted agbrowse Pro run only, former recovery commands remain
-available. They must never create a new run.
+Do not require `WEB_MULTI_NEEDED` in ordinary Power 5 answers. Include that
+decision block only when the user or owning workflow explicitly requests a Web
+Multi advisory decision.

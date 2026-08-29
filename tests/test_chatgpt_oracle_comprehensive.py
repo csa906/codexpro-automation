@@ -115,10 +115,12 @@ def test_web_authored_relay_reaches_complete_without_host_semantic_rewrite(tmp_p
     def fake_execute(path: Path, *, dry_run: bool):
         config = json.loads(path.read_text(encoding="utf-8"))
         assert config["model_strategy"] == "select"
-        assert config["thinking_time"] == "extra-high"
         mission = Path(config["mission_path"])
         text = mission.read_text(encoding="utf-8")
         stage = next(item for item in order if f"stage={item}\n" in text)
+        assert config["thinking_time"] == (
+            "heavy" if stage == "implementation" else "extra-high"
+        )
         attempt_id = next(line.split("=", 1)[1] for line in text.splitlines() if line.startswith("attempt_id="))
         input_sha = next(line.split("=", 1)[1] for line in text.splitlines() if line.startswith("input_mission_sha256="))
         seen.append(stage)
@@ -575,7 +577,7 @@ def test_post_submit_watchdog_persists_same_attempt_and_only_exact_recovers(
     assert second["recovery"]["status"] == "recovered"
 
 
-def test_unambiguous_app_mention_pre_submit_failure_retries_once(tmp_path: Path) -> None:
+def test_raw_app_mention_marker_never_authorizes_replacement(tmp_path: Path) -> None:
     module = load()
     submitted = 0
 
@@ -596,7 +598,7 @@ def test_unambiguous_app_mention_pre_submit_failure_retries_once(tmp_path: Path)
     result = module.run_workflow(manifest(tmp_path), oracle_execute=fake_execute)
 
     assert result["status"] == "attention_required"
-    assert submitted == 2
+    assert submitted == 1
     assert result["next_index"] == 0
 
 
@@ -608,7 +610,7 @@ def test_unambiguous_app_mention_pre_submit_failure_retries_once(tmp_path: Path)
         "--copy-profile cannot be combined with --browser-manual-login",
     ],
 )
-def test_launch_time_pre_submit_failures_also_retry_once(tmp_path: Path, marker: str) -> None:
+def test_raw_launch_time_markers_never_authorize_replacement(tmp_path: Path, marker: str) -> None:
     module = load()
     submitted = 0
 
@@ -625,7 +627,7 @@ def test_launch_time_pre_submit_failures_also_retry_once(tmp_path: Path, marker:
 
     result = module.run_workflow(manifest(tmp_path), oracle_execute=fake_execute)
 
-    assert submitted == 2
+    assert submitted == 1
     assert result["status"] == "attention_required"
     assert result["next_index"] == 0
 

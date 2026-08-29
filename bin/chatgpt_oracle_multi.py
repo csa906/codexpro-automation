@@ -139,7 +139,7 @@ def load_manifest(path: Path) -> dict[str, Any]:
         "next_stage_result_path": next_stage_result,
         "max_concurrency": concurrency,
         "app_name": app_name,
-        "model": str(value.get("model") or "gpt-5.6").strip(),
+        "model": str(value.get("model") or "gpt-5.6-sol").strip(),
         "copy_profile": Path(
             str(value.get("copy_profile") or (Path.home() / ".oracle" / "browser-profile"))
         ).expanduser().resolve(),

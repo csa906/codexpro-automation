@@ -105,11 +105,13 @@ new exact folder. Do not inspect or automate ChatGPT app settings per task.
 | PC-local advice and counterexamples | Local Multi-GPT | Optional, Luna Max, read-only |
 | Plan through final gate | comprehensive mode | Staged web workflow |
 | Minimize local model cost | `ultra-economy` | Luna Max command + separate web stages |
-| Independent final judgment | `pro` | GPT-5.6 Sol Pro + read-only DevSpace |
+| One-shot Power 5 work | `pro` alias or explicit mode + `Pro` | Mode authority + GPT-5.6 Sol Power 5 |
 
-Natural-language aliases use the same routes: `orchestrator` / orchestrator and
-`deep-research` / deep research. Qualified Pro uses Oracle + read-only DevSpace by default; explicit `pro-attachment`
-is reserved for immutable evidence that the approved workspace cannot read.
+Power 1-5 controls reasoning, not authority. `direct`, `plan`, and `review`
+remain read-only at every Power. Explicitly authorized `edit` and
+`orchestrator` runs may edit and test in the exact root at Power 5. Only a
+deterministic pre-submit DevSpace failure plus unchanged-workspace proof may
+use one same-Power, hash-bound attachment fallback.
 
 See [Global Routing](docs/GLOBAL_CHATGPT_ROUTING.md) for selection rules and
 [Ultra Economy Mode](docs/ULTRA_ECONOMY_MODE.md) for its strict contract.
@@ -124,17 +126,21 @@ python "$env:USERPROFILE\.codex\bin\chatgpt_oracle_dispatch.py" `
   --project-root C:\project `
   --mission-path C:\project\mission.md `
   --manifest-output C:\project\.ai-bridge\oracle.json `
-  --reasoning-level "Very High" `
+  --reasoning-level Pro `
+  --fallback-contract C:\project\.ai-bridge\fallback-contract.json `
   --dry-run
 ```
 
-Remove `--dry-run` only when live execution is authorized.
+Write modes require the fallback contract to declare allowed edit paths,
+preimage SHA-256 values, operations, and a local gate. Remove `--dry-run` only
+when live execution is authorized.
 
 ## Safety contract
 
 - Allow one active or uncertain Oracle workflow per project.
 - Qualify the exact root before the first DevSpace submission for a new project.
-- Pro is read-only by default and cannot write, invoke a shell, or run commands.
+- Power never changes authority; only an explicitly authorized edit or
+  orchestrator mission may write or run commands in its exact root.
 - Post-submit failure recovers the existing slug and URL and never resubmits the task.
 - Browser or local-process exit alone is not evidence that web work failed.
 - Never commit secrets, Owner passwords, OAuth tokens, or browser profiles.

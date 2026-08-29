@@ -1,6 +1,6 @@
 {
   "schema": "codexpro.install-manifest/v1",
-  "version": "1.13.1",
+  "version": "1.14.0",
   "include": [
     "bin/chatgpt_agbrowse_bridge.py",
     "bin/chatgpt_agbrowse_composer.py",
@@ -36,6 +36,7 @@
     "bin/chatgpt_oracle_state.py",
     "bin/chatgpt_oracle_profiles.py",
     "bin/chatgpt_oracle_dispatch.py",
+    "bin/chatgpt_oracle_fallback.py",
     "bin/chatgpt_oracle_multi.py",
     "bin/chatgpt_oracle_comprehensive.py",
     "bin/chatgpt_oracle_diagnose.py",
@@ -139,8 +140,10 @@
   "routing": {
     "new_work_engine": "oracle",
     "regular_workspace_transport": "devspace",
-    "pro_transport": "oracle-devspace-readonly",
-    "pro_attachment_transport": "oracle-attachment-only-explicit",
+    "power_levels": "gpt-5.6-sol-power-1-through-5",
+    "pro_transport": "oracle-devspace-mode-authority",
+    "attachment_transport": "oracle-attachment-only-deterministic-fallback",
+    "pro_attachment_transport": "oracle-attachment-only-power5-compatibility-alias",
     "agbrowse": "persisted-run-recovery-only",
     "codexpro": "persisted-run-recovery-only"
   },

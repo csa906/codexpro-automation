@@ -852,6 +852,117 @@ def test_d_coin_missing_exact_root_blocks_before_oracle_or_run_creation(tmp_path
     assert not (tmp_path.parent / f"{tmp_path.name}-host-state" / "runs").exists()
 
 
+def test_mission_durable_write_failure_blocks_oracle_submission(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    runner = load_runner()
+    real_write = runner.STATE.write_bytes_atomic_durable
+    launched = False
+
+    def fail_mission(path: Path, data: bytes, **kwargs):
+        if Path(path).name == "mission.md":
+            raise runner.STATE.OracleStateError(
+                "INJECTED_MISSION_DURABILITY_FAILURE",
+                "mission durability fault",
+            )
+        return real_write(path, data, **kwargs)
+
+    def forbidden_popen(*_args, **_kwargs):
+        nonlocal launched
+        launched = True
+        raise AssertionError("Oracle must not launch before the mission is durable")
+
+    monkeypatch.setattr(runner.STATE, "write_bytes_atomic_durable", fail_mission)
+
+    with pytest.raises(
+        runner.STATE.OracleStateError, match="mission durability fault"
+    ):
+        execute_run(
+            runner,
+            manifest(tmp_path, run_id="d" * 32),
+            run_factory=version_runner,
+            popen_factory=forbidden_popen,
+        )
+
+    assert launched is False
+
+
+def test_run_records_directory_chain_and_flushes_external_artifacts_after_close(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    runner = load_runner()
+    events: list[str] = []
+    real_sync = runner.STATE.sync_existing_file_durable
+
+    def record_sync(path: Path, **kwargs):
+        events.append(f"sync:{Path(path).name}")
+        return real_sync(path, **kwargs)
+
+    monkeypatch.setattr(runner.STATE, "sync_existing_file_durable", record_sync)
+    result = execute_run(
+        runner,
+        manifest(tmp_path, run_id="e" * 32),
+        run_factory=version_runner,
+        popen_factory=popen_for(
+            0,
+            b"answer\nTASK_OUTCOME: EXECUTED\n",
+            {},
+            events,
+        ),
+    )
+
+    assert result["ok"] is True
+    durability = result["result"]["power_loss_durability"]
+    assert durability["run_directory"]["durable"] is True
+    assert Path(durability["run_directory"]["path"]) == Path(result["run_dir"])
+    assert durability["transport_mission"]["durable"] is True
+    assert durability["stdout"]["durable"] is True
+    assert durability["stderr"]["durable"] is True
+    assert durability["output"]["durable"] is True
+    assert durability["transcript"]["durable"] is True
+    assert durability["output"]["sha256"] == result["result"]["artifact_sha256"]
+    assert events[:2] == ["popen", "wait"]
+    assert events[2:5] == ["sync:stdout.log", "sync:stderr.log", "sync:output.md"]
+    if os.name == "nt":
+        assert durability["output"]["file_flush"]["method"] == "FlushFileBuffers"
+        assert "MoveFileExW MOVEFILE_WRITE_THROUGH" in (
+            durability["run_directory"]["boundary"] or ""
+        )
+
+
+def test_external_output_sync_failure_never_becomes_terminal_complete(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    runner = load_runner()
+    real_sync = runner.STATE.sync_existing_file_durable
+
+    def fail_output(path: Path, **kwargs):
+        if Path(path).name == "output.md":
+            raise runner.STATE.OracleStateError(
+                "INJECTED_OUTPUT_SYNC_FAILURE", "output sync fault"
+            )
+        return real_sync(path, **kwargs)
+
+    monkeypatch.setattr(runner.STATE, "sync_existing_file_durable", fail_output)
+    result = execute_run(
+        runner,
+        manifest(tmp_path, run_id="f" * 32),
+        run_factory=version_runner,
+        popen_factory=popen_for(
+            0,
+            b"answer\nTASK_OUTCOME: EXECUTED\n",
+            {},
+            [],
+        ),
+    )
+
+    assert result["ok"] is False
+    assert result["result"]["status"] == "failed"
+    assert result["result"]["session_authority"] == "submitted_unknown"
+    assert result["result"]["terminal_harvested"] is False
+    assert result["result"]["artifact_sha256"] is None
+
+
 def test_pro_attachment_limit_is_exactly_one_mib_and_blocks_before_oracle_launch(tmp_path: Path) -> None:
     runner = load_runner()
     packet = tmp_path / "packet.zip"
@@ -1043,7 +1154,8 @@ def test_exact_output_hash_adjudication_marks_legacy_task_not_executed(
     )
 
     assert adjudicated["ok"] is False
-    assert adjudicated["safe_for_fresh_retry"] is True
+    assert adjudicated["safe_for_fresh_retry"] is False
+    assert adjudicated["mutation_free_proof_required"] is True
     assert adjudicated["task_outcome"] == "not_executed"
     assert adjudicated["result"]["status"] == "complete"
     assert adjudicated["result"]["transport_status"] == "complete"
@@ -2710,8 +2822,7 @@ def test_later_exact_live_observation_restores_provisional_terminal_authority(tm
         oracle_command=custom_oracle_command(),
         popen_factory=observation("completed"),
     )
-    # A later exact live observer is stronger than the provisional terminal
-    # observation because there is still no durable terminal artifact.
+    # Simulate a stale writer trying to regress the monotonic authority ledger.
     regressed = json.loads((run_dir / "state.json").read_text(encoding="utf-8"))
     regressed["status"] = "running"
     regressed["session_authority"] = "live"
@@ -2741,9 +2852,9 @@ def test_later_exact_live_observation_restores_provisional_terminal_authority(tm
 
     assert terminal["status"] == "terminal_observed"
     assert terminal["result"]["session_authority"] == "terminal_observed"
-    assert disagreement["status"] == "session_live"
-    assert disagreement["result"]["status"] == "running"
-    assert disagreement["result"]["session_authority"] == "live"
+    assert disagreement["status"] == "terminal_settle_disagreement"
+    assert disagreement["result"]["status"] == "attention_required"
+    assert disagreement["result"]["session_authority"] == "terminal_observed"
     assert disagreement["result"]["terminal_harvested"] is False
     assert output_absent_during_disagreement
     assert blocked_duplicate["ok"] is False
@@ -2806,8 +2917,8 @@ def test_pro_structured_mission_rejects_short_terminal_preamble(tmp_path: Path) 
         oracle_command=custom_oracle_command(),
         popen_factory=running_observer,
     )
-    assert restored["status"] == "session_live"
-    assert restored["result"]["session_authority"] == "live"
+    assert restored["status"] == "terminal_settle_disagreement"
+    assert restored["result"]["session_authority"] == "terminal_observed"
 
 
 def test_pro_terminal_candidate_with_all_ticked_sections_promotes_without_browser(

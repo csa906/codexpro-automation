@@ -1,5 +1,29 @@
 # 기술 변경 기록
 
+## 1.14.0 - Power 1-5 권한 통합과 안전한 첨부 폴백
+
+- `GPT-5.6 Sol`의 Power 1-5를 `direct`, `plan`, `review`, `edit`,
+  `orchestrator`의 독립적인 추론 수준으로 통합했습니다. Power 5는 더 이상
+  읽기 전용 권한 종류가 아니며, 쓰기 권한은 선택한 모드와 미션이 결정합니다.
+- `--mode pro`는 `direct + Power 5`, `pro-attachment`는 일반 첨부 전송의
+  Power 5 호환 별칭으로 유지합니다. 복잡하거나 중요한 구현 단계는 Power 5를
+  사용하고 명시적으로 선택한 낮은 Power는 그대로 보존합니다.
+- DevSpace가 전송 전에 확정적으로 사용할 수 없고 작업공간 무변경이 해시로
+  증명된 경우에만, 같은 Power의 미션 명시 첨부 전송을 한 번 허용합니다.
+  전송 가능성이나 변경 가능성이 생긴 뒤에는 같은 slug 복구만 가능합니다.
+- 쓰기 첨부 결과는 폐쇄형 구조화 패치로 받고 경로·preimage·SHA-256을 검증한
+  뒤 정확한 루트에서 트랜잭션 적용합니다. 직접 DevSpace 쓰기와 첨부 패치 모두
+  실제 diff/scope와 지정 local gate가 통과해야 완료됩니다.
+- 폴백 권한 영수증을 제출 전에 소비하고 exact run/root/power/attachment hash에
+  결박했으며, 복구 시 영수증이 변경되면 새 제출 없이 중단합니다.
+- 단일 실행도 제출 전에 결정론적 run id, 정규화 계약, whole-workspace baseline,
+  verifier 실행 파일 해시와 episode journal을 저장합니다. 브라우저 복구 뒤에는
+  `--resume-run`이 로컬 diff/gate 또는 패치 단계만 재개합니다.
+- 패치 트랜잭션에 fsync된 WAL·backup·phase를 추가해 프로세스 중단 후 rollback
+  또는 정확한 postimage 검증을 수행합니다. ADS/Win32 별칭, link/reparse root,
+  metadata-only 변경, verifier/edit 중첩과 일반적인 구조화 secret 형식은
+  제출·적용 전에 거부합니다.
+
 ## 1.13.1 - GPT-5.6 Sol Power 5 선택기 호환성
 
 - Oracle을 `0.17.1-custom.11`로 갱신하고, 현재 분리형 모델 선택기에서 같은

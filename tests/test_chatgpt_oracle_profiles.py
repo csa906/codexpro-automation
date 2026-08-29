@@ -27,13 +27,29 @@ def load_profiles():
     return module
 
 
-@pytest.mark.parametrize("mode", ["direct", "plan", "review", "edit", "orchestrator"])
-def test_regular_modes_use_plain_devspace_handoff_and_high_only(tmp_path: Path, mode: str) -> None:
+@pytest.mark.parametrize(
+    ("mode", "expected_reasoning", "expected_thinking"),
+    [
+        ("direct", "Very High", "extra-high"),
+        ("plan", "Very High", "extra-high"),
+        ("review", "Very High", "extra-high"),
+        ("edit", "Very High", "extra-high"),
+        ("orchestrator", "Pro", "heavy"),
+    ],
+)
+def test_regular_modes_use_plain_devspace_handoff_with_mode_owned_power(
+    tmp_path: Path,
+    mode: str,
+    expected_reasoning: str,
+    expected_thinking: str,
+) -> None:
     profiles = load_profiles()
     mission = (tmp_path / "mission.md").resolve()
     contract = profiles.build_launch_contract(mode, mission_path=mission)
     assert contract["route"] == "oracle-devspace"
-    assert contract["reasoning_level"] == "Very High"
+    assert contract["reasoning_level"] == expected_reasoning
+    assert contract["thinking_time"] == expected_thinking
+    assert contract["model"] == "gpt-5.6-sol"
     assert contract["attachments"] == []
     assert contract["app_picker"] is False
     assert contract["app_settings_automation"] is False
@@ -56,13 +72,26 @@ def test_deep_research_is_only_a_mode_flag() -> None:
     assert contract["attachments"] == []
 
 
-@pytest.mark.parametrize("level", ["low", "Pro"])
-def test_regular_reasoning_rejects_unsupported_level_without_downgrade(tmp_path: Path, level: str) -> None:
+@pytest.mark.parametrize(
+    ("level", "reasoning", "thinking"),
+    [
+        ("Pro", "Pro", "heavy"),
+        ("power 5", "Pro", "heavy"),
+        ("xhigh", "Very High", "extra-high"),
+        ("High", "High", "extended"),
+        ("Medium", "Medium", "standard"),
+        ("low", "Low", "light"),
+    ],
+)
+def test_regular_reasoning_supports_all_five_power_levels_without_downgrade(
+    tmp_path: Path, level: str, reasoning: str, thinking: str
+) -> None:
     profiles = load_profiles()
-    with pytest.raises(profiles.OracleProfileError) as exc:
-        profiles.build_launch_contract("plan", mission_path=(tmp_path / "mission.md").resolve(), reasoning_level=level)
-    assert exc.value.code == "REGULAR_REASONING_UNAVAILABLE"
-    assert exc.value.evidence["supported"] == ["Very High", "High", "Medium"]
+    contract = profiles.build_launch_contract(
+        "plan", mission_path=(tmp_path / "mission.md").resolve(), reasoning_level=level
+    )
+    assert contract["reasoning_level"] == reasoning
+    assert contract["thinking_time"] == thinking
 
 
 def test_pro_attachment_is_oracle_attachment_only_and_manual_launches_nothing(tmp_path: Path) -> None:
@@ -71,12 +100,12 @@ def test_pro_attachment_is_oracle_attachment_only_and_manual_launches_nothing(tm
     packet = (tmp_path / "packet.zip").resolve()
     pro = profiles.build_launch_contract("pro-attachment", mission_path=mission, attachment_paths=[mission, packet])
     manual = profiles.build_launch_contract("manual")
-    assert pro["route"] == "oracle-pro-attachment-only"
+    assert pro["route"] == "oracle-attachment-only"
     assert pro["app_policy"] == "forbidden"
     assert pro["oracle_launch"] is True
     assert pro["devspace_required"] is False
     assert pro["model"] == "gpt-5.6-sol"
-    assert pro["task_kind"] == "pro"
+    assert pro["task_kind"] == "direct"
     assert pro["thinking_time"] == "heavy"
     assert pro["attachment_policy"] == "always"
     assert pro["attachments"] == [str(mission), str(packet)]
@@ -93,10 +122,14 @@ def test_regular_ui_effort_contracts_are_distinct_and_accept_korean_labels(tmp_p
     medium = profiles.build_launch_contract("direct", mission_path=mission, reasoning_level="중간")
     high = profiles.build_launch_contract("direct", mission_path=mission, reasoning_level="높음")
     very_high = profiles.build_launch_contract("direct", mission_path=mission, reasoning_level="xhigh")
+    low = profiles.build_launch_contract("direct", mission_path=mission, reasoning_level="낮음")
+    pro = profiles.build_launch_contract("direct", mission_path=mission, reasoning_level="프로")
 
     assert medium["thinking_time"] == "standard"
     assert high["thinking_time"] == "extended"
     assert very_high["thinking_time"] == "extra-high"
+    assert low["thinking_time"] == "light"
+    assert pro["thinking_time"] == "heavy"
 
 
 def test_pro_attachment_includes_mission_once_and_regular_rejects_attachments(tmp_path: Path) -> None:
@@ -110,22 +143,46 @@ def test_pro_attachment_includes_mission_once_and_regular_rejects_attachments(tm
 
 
 @pytest.mark.parametrize("mode", ["pro", "pro-readonly", "pro_readonly"])
-def test_pro_defaults_to_devspace_without_attachments_and_readonly_is_compatible(tmp_path: Path, mode: str) -> None:
+def test_pro_is_a_direct_power5_devspace_compatibility_alias(tmp_path: Path, mode: str) -> None:
     profiles = load_profiles()
     mission = (tmp_path / "mission.md").resolve()
     contract = profiles.build_launch_contract(mode, mission_path=mission)
 
-    assert contract["route"] == "oracle-pro-devspace-readonly"
+    assert contract["route"] == "oracle-devspace"
+    assert contract["task_kind"] == "direct"
     assert contract["app_name"] == "DevSpace"
     assert contract["model"] == "gpt-5.6-sol"
     assert contract["model_strategy"] == "select"
     assert contract["thinking_time"] == "heavy"
     assert contract["research"] is False
     assert contract["attachments"] == []
-    assert contract["composer_prompt"].startswith(f"@DevSpace Read the read-only mission file: {mission}.")
+    assert contract["composer_prompt"].startswith(f"@DevSpace Read and execute the mission file: {mission}.")
     with pytest.raises(profiles.OracleProfileError) as exc:
         profiles.build_launch_contract(mode, mission_path=mission, attachment_paths=[mission])
-    assert exc.value.code == "PRO_READONLY_ATTACHMENTS_FORBIDDEN"
+    assert exc.value.code == "REGULAR_ATTACHMENTS_FORBIDDEN"
+
+
+def test_generic_attachment_preserves_selected_power(tmp_path: Path) -> None:
+    profiles = load_profiles()
+    mission = (tmp_path / "prompt.txt").resolve()
+    contract = profiles.build_launch_contract(
+        "attachment", mission_path=mission, attachment_paths=[mission], reasoning_level="Medium"
+    )
+    assert contract["route"] == "oracle-attachment-only"
+    assert contract["task_kind"] == "direct"
+    assert contract["reasoning_level"] == "Medium"
+    assert contract["thinking_time"] == "standard"
+
+
+def test_deep_research_rejects_power5_slider_claim(tmp_path: Path) -> None:
+    profiles = load_profiles()
+    with pytest.raises(profiles.OracleProfileError) as exc:
+        profiles.build_launch_contract(
+            "deep-research",
+            mission_path=(tmp_path / "mission.md").resolve(),
+            reasoning_level="Pro",
+        )
+    assert exc.value.code == "DEEP_RESEARCH_POWER_UNAVAILABLE"
 
 
 def test_relative_mission_is_rejected(tmp_path: Path) -> None:

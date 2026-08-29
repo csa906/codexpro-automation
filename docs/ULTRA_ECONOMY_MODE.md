@@ -74,8 +74,9 @@ python "$env:USERPROFILE\.codex\bin\chatgpt_oracle_comprehensive.py" `
   --manifest D:\project\workflow.json --dry-run
 ```
 
-dry-run은 첫 단계가 qualified Pro, read-only DevSpace인지 확인하고 실제 제출은
-하지 않습니다. 실제 실행은 `--dry-run`만 제거합니다.
+dry-run은 첫 설계 단계가 Power 5의 읽기 전용 `plan` 권한과 정확한 DevSpace
+root를 사용하는지 확인하고 실제 제출은 하지 않습니다. 실제 실행은
+`--dry-run`만 제거합니다.
 
 ## 완료·중단 조건
 

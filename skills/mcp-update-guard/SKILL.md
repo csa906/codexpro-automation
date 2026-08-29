@@ -19,18 +19,28 @@ preserve unrelated local customizations.
 3. For non-trivial GPT automation design or implementation, use the selected
    current GPT workflow only when the user asked for web delegation. Every new
    ChatGPT run uses Oracle:
-   - regular modes, Deep Research, comprehensive stages, and Web Multi use
-     Oracle plus the manually registered DevSpace app;
-   - qualified Pro uses Oracle with `GPT-5.6 Sol` at the Pro effort and
-     read-only DevSpace; explicit `pro-attachment` is limited to immutable or
-     DevSpace-unreadable evidence and is never an automatic fallback;
+   - direct, plan, review, edit, orchestrator, comprehensive stages, and Web
+     Multi prefer the manually registered DevSpace app at every Power;
+   - Power 5/Pro is a normal reasoning level, not an authority mode: answer,
+     plan, and review remain read-only, while only an explicitly authorized
+     edit/orchestrator mission may write within its exact root using
+     `apply_patch`, `bash`/shell commands, and tests;
+   - choose Power 5 automatically for complex or important work and preserve
+     explicit or adequate lower powers for ordinary work;
+   - only a deterministic pre-submit, mutation-free DevSpace failure may use
+     mission-explicit hashed attachments while preserving mode and Power;
+     `pro-attachment` is the legacy Power 5 attachment alias;
    - CodexPro/agbrowse may be used only for exact recovery of an already
      persisted legacy run and never as a fallback.
 4. Prefer small compatibility changes over wholesale replacement. Preserve
    local ports, names, roots, tokens, routing, and hooks unless the task
    explicitly changes them.
 5. Batch coherent edits, inspect the final diff once, run focused regression
-   tests, then broader tests according to blast radius.
+   tests, then broader tests according to blast radius. A write mission is not
+   complete until the host proves changed-path scope, preserved WIP, and the
+   declared local gate. An attachment write result must be a structured patch
+   whose paths and preimage hashes the host validates before transactional
+   apply under the exact-project mutex.
 6. Synchronize reusable GPT automation changes to the authoritative
    `codexpro-automation` source, install the verified bytes, commit with a
    descriptive message, push public-safe changes, and check CI.
@@ -61,8 +71,10 @@ instead of the layer that failed.
 - Do not delete or recreate credential-bearing state during a normal update.
 - Do not use resource pressure as authority to block, terminate, downgrade, or
   duplicate user-visible work.
-- Do not silently switch Oracle model, reasoning level, transport, or browser
-  backend.
+- Do not silently switch Oracle model, Power, root, or browser backend. The only
+  automatic transport change is the guarded pre-submit, mutation-free hashed
+  attachment fallback above; a post-submit uncertain or possibly mutated run
+  permits exact-session recovery only.
 - Do not create a new legacy agbrowse/CodexPro run while repairing recovery
   code.
 - Stop and report exact dirty files when authoritative persistence, push, or CI

@@ -8,9 +8,12 @@ All new modes use Oracle:
 
 - regular direct, plan, review, edit, orchestrator, research, comprehensive,
   and Web Multi-GPT use Oracle plus the manually registered DevSpace app;
-- qualified Pro uses Oracle plus the manually registered DevSpace app in an
-  exact-root, read-only route; explicit `pro-attachment` is attachment-only
-  only for immutable or external evidence that DevSpace cannot read;
+- Power 1-5 is independent of operation authority; Power 5 may run an
+  authorized exact-root `edit` or `orchestrator`, while `--mode pro` remains
+  the read-only `direct + Power 5` compatibility alias;
+- generic attachment transport preserves the chosen Power and may be selected
+  automatically only after deterministic pre-submit DevSpace failure plus
+  unchanged-workspace proof; `pro-attachment` is its Power 5 alias;
 - CodexPro and agbrowse may be used only for exact recovery of an already
   persisted legacy run.
 

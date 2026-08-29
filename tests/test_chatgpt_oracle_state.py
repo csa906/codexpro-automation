@@ -54,6 +54,95 @@ def custom_oracle_command(platform_name: str = "nt") -> list[str]:
     ]
 
 
+def test_durable_json_writer_orders_temp_fsync_replace_and_parent_sync(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    state = load_state()
+    target = tmp_path / "state.json"
+    events: list[str] = []
+
+    def write_temp(path: Path, data: bytes) -> None:
+        events.append("temp-write-flush-file-fsync")
+        path.write_bytes(data)
+
+    def replace(temp: Path, destination: Path, *, platform_name: str) -> dict[str, object]:
+        events.append("atomic-replace")
+        os.replace(temp, destination)
+        return {"write_through": platform_name == "nt"}
+
+    def sync_parent(parent: Path, *, platform_name: str) -> dict[str, object]:
+        events.append("parent-durability")
+        return {"durable": True, "method": f"test-{platform_name}", "boundary": None}
+
+    monkeypatch.setattr(state, "_write_temp_file_durable", write_temp)
+    monkeypatch.setattr(state, "_atomic_replace_durable", replace)
+    monkeypatch.setattr(state, "_sync_parent_directory_durable", sync_parent)
+
+    receipt = state.write_json_atomic_durable(
+        target, {"value": 1}, _platform_name="posix"
+    )
+
+    assert events == [
+        "temp-write-flush-file-fsync",
+        "atomic-replace",
+        "parent-durability",
+    ]
+    assert receipt["durable"] is True
+    assert json.loads(target.read_text(encoding="utf-8")) == {"value": 1}
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX directory fsync semantics required")
+def test_posix_durable_json_writer_reports_parent_directory_fsync(tmp_path: Path) -> None:
+    state = load_state()
+    receipt = state.write_json_atomic_durable(tmp_path / "state.json", {"value": 1})
+
+    assert receipt["durable"] is True
+    assert receipt["parent_directory"]["durable"] is True
+    assert receipt["parent_directory"]["method"] == "fsync-directory"
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows write-through semantics required")
+def test_windows_durable_json_writer_uses_write_through_and_reports_directory_boundary(
+    tmp_path: Path,
+) -> None:
+    state = load_state()
+    receipt = state.write_json_atomic_durable(tmp_path / "state.json", {"value": 1})
+
+    assert receipt["durable"] is True
+    assert receipt["replace"]["write_through"] is True
+    assert receipt["file_flush"]["durable"] is True
+    assert "directory_flush_supported" in receipt["parent_directory"]
+
+
+def test_durable_mkdir_creates_and_syncs_each_missing_ancestor_in_order(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    state = load_state()
+    target = tmp_path / "one" / "two" / "three"
+    real_create = state._create_directory_entry_durable
+    calls: list[tuple[str, str]] = []
+
+    def record_create(path: Path, *, platform_name: str) -> dict[str, object]:
+        calls.append((str(path), platform_name))
+        return real_create(path, platform_name=platform_name)
+
+    monkeypatch.setattr(state, "_create_directory_entry_durable", record_create)
+    receipt = state.ensure_directory_durable(target)
+
+    assert [Path(path) for path, _platform in calls] == [
+        tmp_path / "one",
+        tmp_path / "one" / "two",
+        target,
+    ]
+    assert [Path(item["path"]) for item in receipt["created"]] == [
+        tmp_path / "one",
+        tmp_path / "one" / "two",
+        target,
+    ]
+    assert all(item["parent_directory"]["durable"] for item in receipt["created"])
+    assert receipt["durable"] is True
+
+
 def test_v1_task_outcome_accepts_exact_provider_reference_footer(tmp_path: Path) -> None:
     state = load_state()
     output = tmp_path / "output.md"
@@ -170,6 +259,60 @@ def test_pro_manifest_is_attachment_only_and_hashes_exact_files(tmp_path: Path) 
     payload = state.state_payload(config, layout, status="prepared", resolved_version="oracle 0.17.1")
     assert payload["transport"] == "pro-attachment-only"
     assert payload["attachments"][1]["sha256"] == state.sha256_file(packet.resolve())
+
+
+def test_attachment_fallback_authority_binds_exact_run_and_recovery_state(tmp_path: Path) -> None:
+    state = load_state()
+    prompt = tmp_path / "fallback-mission.md"
+    evidence = tmp_path / "evidence.md"
+    prompt.write_text("strict fallback instructions", encoding="utf-8")
+    evidence.write_text("immutable evidence", encoding="utf-8")
+    run_id = "20260829T010101Z-a1b2c3d4e5f6"
+    host_root = (tmp_path.parent / f"{tmp_path.name}-host-state").resolve()
+    authority_dir = host_root / "attachment-fallbacks" / run_id
+    authority_dir.mkdir(parents=True)
+    authority_path = authority_dir / "authority.json"
+    attachment_receipt = [
+        {"path": str(prompt.resolve()), "sha256": state.sha256_file(prompt.resolve())},
+        {"path": str(evidence.resolve()), "sha256": state.sha256_file(evidence.resolve())},
+    ]
+    authority = {
+        "schema": state.FALLBACK_AUTHORITY_SCHEMA,
+        "consumed": True,
+        "fallback_run_id": run_id,
+        "project_root": str(tmp_path.resolve()),
+        "action_authority": "read-only",
+        "thinking_time": "standard",
+        "instruction_sha256": state.sha256_file(prompt.resolve()),
+        "attachments": attachment_receipt,
+    }
+    authority_path.write_text(json.dumps(authority), encoding="utf-8")
+    authority_sha = state.sha256_file(authority_path)
+    config = state.load_manifest(manifest(
+        tmp_path,
+        prompt.resolve(),
+        run_id=run_id,
+        transport="attachment-only",
+        app_name=None,
+        task_kind="direct",
+        action_authority="read-only",
+        model="gpt-5.6-sol",
+        model_strategy="select",
+        thinking_time="standard",
+        task_outcome_contract="legacy",
+        attachments=[str(prompt.resolve()), str(evidence.resolve())],
+        fallback_authority={"path": str(authority_path), "sha256": authority_sha},
+    ))
+    payload = state.state_payload(
+        config, state.create_layout(config, run_id=run_id), status="prepared", resolved_version="test"
+    )
+
+    assert "TASK_OUTCOME" not in state.composer_prompt(config)
+    assert state.verify_fallback_authority_state(payload)["fallback_run_id"] == run_id
+    authority_path.write_text(json.dumps({**authority, "consumed": False}), encoding="utf-8")
+    with pytest.raises(state.OracleStateError) as exc:
+        state.verify_fallback_authority_state(payload)
+    assert exc.value.code == "FALLBACK_AUTHORITY_STATE_HASH_MISMATCH"
 
 
 def test_pro_readonly_manifest_requires_devspace_and_stays_inside_project(tmp_path: Path) -> None:
@@ -727,6 +870,31 @@ def test_connector_failure_with_true_prompt_submitted_fails_closed(
     state_path.write_text(json.dumps(payload), encoding="utf-8")
 
     assert state.proven_pre_submit_connector_failure(state_path) is None
+
+
+def test_connector_failure_proof_supports_regular_devspace_at_nonpro_power(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    state = load_state()
+    test_exact_connector_failure_with_false_prompt_submitted_releases_project(
+        tmp_path, monkeypatch
+    )
+    meta_path = tmp_path / "oracle-sessions" / "oracle-test-connector" / "meta.json"
+    meta = json.loads(meta_path.read_text(encoding="utf-8"))
+    meta["browser"]["config"]["thinkingTime"] = "standard"
+    meta_path.write_text(json.dumps(meta), encoding="utf-8")
+
+    state_path = tmp_path / "runs" / "connector-run" / "state.json"
+    payload = json.loads(state_path.read_text(encoding="utf-8"))
+    payload["transport"] = "devspace"
+    payload["session_authority"] = "submitted_unknown"
+    payload["profile"]["thinking_time"] = "standard"
+    payload.pop("pre_submit_failure", None)
+    state_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    evidence = state.proven_pre_submit_connector_failure(state_path)
+    assert evidence is not None
+    assert evidence["prompt_submitted"] is False
 
 
 def test_not_executed_outcome_needs_attention_even_when_terminal(tmp_path: Path) -> None:

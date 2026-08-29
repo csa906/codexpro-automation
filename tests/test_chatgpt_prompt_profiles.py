@@ -80,7 +80,7 @@ def test_regular_reasoning_selection_chooses_strongest_and_fails_closed(monkeypa
         PROFILES.resolve_regular_mode_selection()
 
 
-def test_regular_reasoning_selection_defaults_to_guaranteed_high(monkeypatch) -> None:
+def test_regular_reasoning_selection_defaults_to_legacy_guaranteed_high(monkeypatch) -> None:
     monkeypatch.delenv("CODEX_CHATGPT_REGULAR_MODE_CAPABILITIES", raising=False)
 
     selection = PROFILES.resolve_regular_mode_selection()

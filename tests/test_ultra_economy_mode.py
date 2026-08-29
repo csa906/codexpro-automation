@@ -60,11 +60,16 @@ def test_ultra_economy_skill_has_one_time_user_activation_handshake() -> None:
 
 def test_ultra_economy_skill_forces_fresh_luna_max_workers_and_web_stages() -> None:
     text = SKILL.read_text(encoding="utf-8")
+    compact = " ".join(text.split())
     assert "fresh `default`" in text
     assert "Do not use the globally configured scout" in text
-    assert "qualified Pro design" in text
-    assert "regular web implementation" in text
-    assert "separate regular web final verification" in text
+    assert "Power 5 plan/design" in text
+    assert "regular web design review and implementation-mission authoring" in text
+    assert "regular web implementation and project tests" in text
+    assert "separate regular web final verification or repair handoff" in text
+    assert "Power is independent of stage authority" in text
+    assert "Only an explicitly authorized implementation `edit`/`orchestrator` stage may write" in compact
+    assert "Generic attachment transport supports Power 1-5" in compact
     assert "zero-exit local" in text
 
 

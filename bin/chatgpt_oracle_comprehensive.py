@@ -168,7 +168,7 @@ def load_manifest(path: Path) -> dict[str, Any]:
         "workflow_profile": workflow_profile,
         "initial_stage": initial_stage,
         "app_name": app_name,
-        "model": str(value.get("model") or "gpt-5.6"),
+        "model": str(value.get("model") or "gpt-5.6-sol"),
         "local_gate_command": list(local_gate),
         "manifest_sha256": sha(path.resolve(strict=True)),
         "workflow_id": workflow_id,
@@ -441,11 +441,17 @@ def _oracle_manifest(
         "project_root": str(config["project_root"]),
         "mission_path": str(mission),
         "mode": "browser",
-        "model": "gpt-5.6-sol" if stage == "pro" else config["model"],
+        "task_kind": stage,
+        "action_authority": (
+            "mission-owned-adaptive-execution" if stage == "implementation" else "read-only"
+        ),
+        "model": "gpt-5.6-sol" if stage in {"pro", "implementation"} else config["model"],
         "model_strategy": "select",
-        # Pro is the explicit highest effort in the current GPT-5.6 Sol UI;
-        # regular comprehensive stages use the separately verified Extra High.
-        "thinking_time": "heavy" if stage == "pro" else "extra-high",
+        # Complex implementation is a normal Power 5 use, with authority owned
+        # by its operation mission. The optional Pro advisory stage remains
+        # read-only because its mission/profile is read-only, not because Power
+        # 5 implies a separate permission class.
+        "thinking_time": "heavy" if stage in {"pro", "implementation"} else "extra-high",
         "research": "off",
         "archive": "auto",
         "parallel_parent_id": config["_parallel_parent_id"],
@@ -915,20 +921,20 @@ def _state_path(config: dict[str, Any], workflow_id: str) -> Path:
 
 def _is_unambiguous_pre_submit_failure(run_dir: Path) -> bool:
     state_path = run_dir / "state.json"
-    if state_path.is_file():
-        try:
-            if RUNNER.STATE.proven_pre_submit_failure(state_path) is not None:
-                return True
-        except RUNNER.STATE.OracleStateError:
-            pass
-    output = run_dir / "output.md"
-    if output.is_file() and output.read_bytes().strip():
+    if not state_path.is_file():
         return False
-    stdout = run_dir / "stdout.log"
-    if not stdout.is_file():
+    try:
+        state = RUNNER.STATE.load_state(state_path)
+        proof = RUNNER.STATE.proven_pre_submit_failure(state_path)
+    except RUNNER.STATE.OracleStateError:
         return False
-    text = stdout.read_text(encoding="utf-8", errors="replace")
-    return any(marker in text for marker in UNAMBIGUOUS_PRE_SUBMIT_MARKERS)
+    return bool(
+        proof is not None
+        and state.get("session_authority") == "pre_submit"
+        and state.get("terminal_harvested") is not True
+        and not RUNNER.STATE.output_is_nonempty(run_dir / "output.md")
+        and not RUNNER.STATE._state_has_conversation_url(state)
+    )
 
 
 def _pre_submit_retry_count(

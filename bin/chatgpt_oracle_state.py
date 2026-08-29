@@ -154,7 +154,11 @@ ORACLE_CONNECTOR_PRE_SUBMIT_MESSAGES = {
 PROFILE_COPY_DEPENDENCY = "rsync"
 PROFILE_COPY_NATIVE_PLATFORMS = ("nt",)
 PRO_TRANSPORTS = frozenset(("pro-attachment-only", "pro-devspace-readonly"))
+ATTACHMENT_TRANSPORTS = frozenset(("attachment-only", "pro-attachment-only"))
 DEVSPACE_TRANSPORTS = frozenset(("devspace", "pro-devspace-readonly"))
+ACTION_AUTHORITIES = frozenset(("read-only", "workspace-write", "mission-owned-adaptive-execution"))
+FALLBACK_AUTHORITY_SCHEMA = "codex.chatgpt.oracle-attachment-fallback-authority/v1"
+EXECUTION_AUTHORITY_SCHEMA = "codex.chatgpt.oracle-dispatch-execution-authority/v1"
 
 
 def is_pro_transport(transport: str) -> bool:
@@ -170,7 +174,7 @@ def is_pro_readonly_transport(transport: str) -> bool:
 
 
 def is_attachment_transport(transport: str) -> bool:
-    return str(transport or "").strip().casefold() == "pro-attachment-only"
+    return str(transport or "").strip().casefold() in ATTACHMENT_TRANSPORTS
 
 
 def profile_copy_is_supported(
@@ -209,6 +213,8 @@ class OracleConfig:
     mission_sha256: str
     app_name: str | None
     mode: str
+    task_kind: str
+    action_authority: str
     transport: str
     attachments: tuple[Path, ...]
     attachment_sha256s: tuple[str, ...]
@@ -232,6 +238,10 @@ class OracleConfig:
     requested_run_id: str | None
     web_multi_child_provenance_path: Path | None
     web_multi_child_provenance_sha256: str | None
+    fallback_authority_path: Path | None = None
+    fallback_authority_sha256: str | None = None
+    execution_authority_path: Path | None = None
+    execution_authority_sha256: str | None = None
 
 
 @dataclass(frozen=True)
@@ -401,9 +411,21 @@ def load_manifest(path: Path, *, platform_name: str | None = None) -> OracleConf
     mode = str(payload.get("mode") or "browser").strip().casefold()
     if mode != "browser":
         raise OracleStateError("MODE_INVALID", "Oracle foundation runner supports mode=browser only")
+    task_kind = str(payload.get("task_kind") or "direct").strip().casefold()
+    if not task_kind or APP_RE.fullmatch(task_kind) is None:
+        raise OracleStateError("TASK_KIND_INVALID", "task_kind must be one nonempty safe line")
+    action_authority = str(payload.get("action_authority") or "read-only").strip().casefold()
+    if action_authority not in ACTION_AUTHORITIES:
+        raise OracleStateError(
+            "ACTION_AUTHORITY_INVALID",
+            "action_authority must be read-only, workspace-write, or mission-owned-adaptive-execution",
+        )
     transport = str(payload.get("transport") or "devspace").strip().casefold()
-    if transport not in {"devspace", *PRO_TRANSPORTS}:
-        raise OracleStateError("TRANSPORT_INVALID", "transport must be devspace, pro-attachment-only, or pro-devspace-readonly")
+    if transport not in {"devspace", *PRO_TRANSPORTS, *ATTACHMENT_TRANSPORTS}:
+        raise OracleStateError(
+            "TRANSPORT_INVALID",
+            "transport must be devspace, attachment-only, pro-attachment-only, or pro-devspace-readonly",
+        )
     app_name_raw = str(payload.get("app_name") or "").strip().lstrip("@").strip()
     if is_devspace_transport(transport):
         if not is_within(project_root, mission_path):
@@ -416,19 +438,25 @@ def load_manifest(path: Path, *, platform_name: str | None = None) -> OracleConf
         attachments: tuple[Path, ...] = ()
     elif is_attachment_transport(transport):
         if app_name_raw:
-            raise OracleStateError("PRO_APP_FORBIDDEN", "Pro attachment-only runs must not name an app")
+            raise OracleStateError(
+                "PRO_APP_FORBIDDEN" if transport == "pro-attachment-only" else "ATTACHMENT_APP_FORBIDDEN",
+                "attachment-only runs must not name an app",
+            )
         app_name = None
         raw_attachments = payload.get("attachments")
         if not isinstance(raw_attachments, list) or not raw_attachments:
-            raise OracleStateError("PRO_ATTACHMENTS_REQUIRED", "Pro requires one or more exact attachment files")
+            raise OracleStateError(
+                "PRO_ATTACHMENTS_REQUIRED" if transport == "pro-attachment-only" else "ATTACHMENTS_REQUIRED",
+                "attachment-only runs require one or more exact files",
+            )
         attachments = tuple(
             exact_regular_file(value, label=f"attachment_{index}")
             for index, value in enumerate(raw_attachments)
         )
         if len(set(attachments)) != len(attachments):
-            raise OracleStateError("PRO_ATTACHMENTS_DUPLICATE", "Pro attachment paths must be unique")
+            raise OracleStateError("ATTACHMENTS_DUPLICATE", "attachment paths must be unique")
         if mission_path not in attachments:
-            raise OracleStateError("PRO_MISSION_ATTACHMENT_REQUIRED", "mission_path must be one of the Pro attachments")
+            raise OracleStateError("MISSION_ATTACHMENT_REQUIRED", "mission_path must be one of the attachments")
     state_root = oracle_state_root()
     if is_within(project_root, state_root) or is_within(state_root, project_root):
         raise OracleStateError(
@@ -495,6 +523,18 @@ def load_manifest(path: Path, *, platform_name: str | None = None) -> OracleConf
             raise OracleStateError("PRO_MODEL_STRATEGY_INVALID", "Pro requires explicit model selection")
         if thinking_time != "heavy":
             raise OracleStateError("PRO_THINKING_TIME_INVALID", "Pro requires heavy reasoning")
+    elif is_attachment_transport(transport):
+        if model.casefold() != "gpt-5.6-sol":
+            raise OracleStateError(
+                "ATTACHMENT_MODEL_INVALID",
+                "attachment fallback requires explicit GPT-5.6 Sol model selection",
+                {"model": model},
+            )
+        if model_strategy != "select":
+            raise OracleStateError(
+                "ATTACHMENT_MODEL_STRATEGY_INVALID",
+                "attachment fallback requires explicit model selection",
+            )
     copy_profile_raw = str(payload.get("copy_profile") or "").strip()
     if copy_profile_raw:
         copy_profile = absolute_path(copy_profile_raw, label="copy_profile", must_exist=True)
@@ -527,8 +567,11 @@ def load_manifest(path: Path, *, platform_name: str | None = None) -> OracleConf
     research = str(payload.get("research") or "off").strip().casefold()
     if research not in {"off", "deep"}:
         raise OracleStateError("RESEARCH_INVALID", "research must be off or deep")
-    if is_pro_transport(transport) and research != "off":
-        raise OracleStateError("PRO_RESEARCH_FORBIDDEN", "Pro attachment-only runs do not enable research mode")
+    if is_attachment_transport(transport) and research != "off":
+        raise OracleStateError(
+            "PRO_RESEARCH_FORBIDDEN" if transport == "pro-attachment-only" else "ATTACHMENT_RESEARCH_FORBIDDEN",
+            "attachment-only runs do not enable research mode",
+        )
     archive = str(payload.get("archive") or "auto").strip().casefold()
     if archive not in {"auto", "always", "never"}:
         raise OracleStateError("ARCHIVE_INVALID", "archive must be auto, always, or never")
@@ -540,8 +583,10 @@ def load_manifest(path: Path, *, platform_name: str | None = None) -> OracleConf
         )
     if is_attachment_transport(transport) and task_outcome_contract != "legacy":
         raise OracleStateError(
-            "PRO_TASK_OUTCOME_CONTRACT_FORBIDDEN",
-            "Pro attachment-only output is not wrapped in the DevSpace task outcome contract",
+            "PRO_TASK_OUTCOME_CONTRACT_FORBIDDEN"
+            if transport == "pro-attachment-only"
+            else "ATTACHMENT_TASK_OUTCOME_CONTRACT_FORBIDDEN",
+            "attachment-only output is governed by its immutable evidence or patch envelope, not the DevSpace task outcome contract",
         )
     if is_pro_readonly_transport(transport) and task_outcome_contract != "v1":
         raise OracleStateError(
@@ -558,12 +603,95 @@ def load_manifest(path: Path, *, platform_name: str | None = None) -> OracleConf
     provenance_raw = payload.get("web_multi_child_provenance_path")
     provenance_path = exact_regular_file(provenance_raw, label="web_multi_child_provenance_path") if provenance_raw else None
     provenance_sha256 = sha256_file(provenance_path) if provenance_path else None
+    execution_raw = payload.get("execution_authority")
+    execution_path: Path | None = None
+    execution_sha256: str | None = None
+    if execution_raw is not None:
+        if not is_devspace_transport(transport):
+            raise OracleStateError(
+                "EXECUTION_AUTHORITY_TRANSPORT_INVALID",
+                "dispatch execution authority may bind only a DevSpace transport",
+            )
+        if not isinstance(execution_raw, dict) or set(execution_raw) != {"path", "sha256"}:
+            raise OracleStateError("EXECUTION_AUTHORITY_INVALID", "execution_authority must contain only path and sha256")
+        execution_path = exact_regular_file(execution_raw.get("path"), label="execution_authority.path")
+        expected_execution_sha = str(execution_raw.get("sha256") or "").strip().casefold()
+        execution_sha256 = sha256_file(execution_path)
+        if re.fullmatch(r"[a-f0-9]{64}", expected_execution_sha) is None or execution_sha256 != expected_execution_sha:
+            raise OracleStateError("EXECUTION_AUTHORITY_HASH_MISMATCH", "execution authority bytes changed")
+        if not is_within(oracle_state_root() / "dispatcher-episodes", execution_path):
+            raise OracleStateError("EXECUTION_AUTHORITY_PATH_INVALID", "execution authority is outside canonical host state")
+        try:
+            execution_value = json.loads(execution_path.read_text(encoding="utf-8", errors="strict"))
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise OracleStateError("EXECUTION_AUTHORITY_JSON_INVALID", "execution authority is not strict UTF-8 JSON") from exc
+        if (
+            not isinstance(execution_value, dict)
+            or execution_value.get("schema") != EXECUTION_AUTHORITY_SCHEMA
+            or execution_value.get("claimed") is not True
+            or execution_value.get("run_id") != requested_run_id
+            or execution_value.get("project_root") != str(project_root)
+            or execution_value.get("mission_path") != str(mission_path)
+            or execution_value.get("mission_sha256") != sha256_file(mission_path)
+            or execution_value.get("action_authority") != action_authority
+            or execution_value.get("thinking_time") != thinking_time
+        ):
+            raise OracleStateError("EXECUTION_AUTHORITY_BINDING_MISMATCH", "execution authority does not bind this exact run")
+    fallback_raw = payload.get("fallback_authority")
+    fallback_path: Path | None = None
+    fallback_sha256: str | None = None
+    if fallback_raw is not None:
+        if not is_attachment_transport(transport):
+            raise OracleStateError(
+                "FALLBACK_AUTHORITY_TRANSPORT_INVALID",
+                "fallback authority may bind only an attachment-only transport",
+            )
+        if not isinstance(fallback_raw, dict) or set(fallback_raw) != {"path", "sha256"}:
+            raise OracleStateError("FALLBACK_AUTHORITY_INVALID", "fallback_authority must contain only path and sha256")
+        fallback_path = exact_regular_file(fallback_raw.get("path"), label="fallback_authority.path")
+        expected_fallback_sha = str(fallback_raw.get("sha256") or "").strip().casefold()
+        if re.fullmatch(r"[a-f0-9]{64}", expected_fallback_sha) is None:
+            raise OracleStateError("FALLBACK_AUTHORITY_SHA256_INVALID", "fallback authority sha256 is invalid")
+        fallback_sha256 = sha256_file(fallback_path)
+        if fallback_sha256 != expected_fallback_sha:
+            raise OracleStateError("FALLBACK_AUTHORITY_HASH_MISMATCH", "fallback authority bytes changed")
+        authority_root = oracle_state_root() / "attachment-fallbacks"
+        if not is_within(authority_root, fallback_path):
+            raise OracleStateError(
+                "FALLBACK_AUTHORITY_PATH_INVALID",
+                "fallback authority must stay inside canonical Oracle host state",
+            )
+        try:
+            fallback_value = json.loads(fallback_path.read_text(encoding="utf-8", errors="strict"))
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise OracleStateError("FALLBACK_AUTHORITY_JSON_INVALID", "fallback authority is not strict UTF-8 JSON") from exc
+        actual_attachments = [
+            {"path": str(path), "sha256": digest}
+            for path, digest in zip(attachments, tuple(sha256_file(item) for item in attachments), strict=True)
+        ]
+        if (
+            not isinstance(fallback_value, dict)
+            or fallback_value.get("schema") != FALLBACK_AUTHORITY_SCHEMA
+            or fallback_value.get("consumed") is not True
+            or fallback_value.get("fallback_run_id") != requested_run_id
+            or fallback_value.get("project_root") != str(project_root)
+            or fallback_value.get("action_authority") != action_authority
+            or fallback_value.get("thinking_time") != thinking_time
+            or fallback_value.get("instruction_sha256") != sha256_file(mission_path)
+            or fallback_value.get("attachments") != actual_attachments
+        ):
+            raise OracleStateError(
+                "FALLBACK_AUTHORITY_BINDING_MISMATCH",
+                "fallback authority does not bind this exact run, root, power, mission, and attachments",
+            )
     return OracleConfig(
         project_root,
         mission_path,
         sha256_file(mission_path),
         app_name,
         mode,
+        task_kind,
+        action_authority,
         transport,
         attachments,
         tuple(sha256_file(item) for item in attachments),
@@ -587,6 +715,10 @@ def load_manifest(path: Path, *, platform_name: str | None = None) -> OracleConf
         requested_run_id,
         provenance_path,
         provenance_sha256,
+        fallback_path,
+        fallback_sha256,
+        execution_path,
+        execution_sha256,
     )
 
 
@@ -655,7 +787,9 @@ def create_layout(config: OracleConfig, *, run_id: str | None = None) -> RunLayo
 def state_payload(config: OracleConfig, layout: RunLayout, *, status: str, resolved_version: str, exit_code: int | None = None) -> dict[str, Any]:
     return {
         "schema": STATE_SCHEMA, "run_id": layout.run_id, "project_root": str(config.project_root),
-        "mode": config.mode, "transport": config.transport, "app_name": config.app_name,
+        "mode": config.mode, "task_kind": config.task_kind,
+        "action_authority": config.action_authority,
+        "transport": config.transport, "app_name": config.app_name,
         "profile": {
             "model": config.model,
             "model_strategy": config.model_strategy,
@@ -670,7 +804,16 @@ def state_payload(config: OracleConfig, layout: RunLayout, *, status: str, resol
             {"path": str(config.web_multi_child_provenance_path), "sha256": config.web_multi_child_provenance_sha256}
             if config.web_multi_child_provenance_path else None
         ),
+        "fallback_authority": (
+            {"path": str(config.fallback_authority_path), "sha256": config.fallback_authority_sha256}
+            if config.fallback_authority_path else None
+        ),
+        "execution_authority": (
+            {"path": str(config.execution_authority_path), "sha256": config.execution_authority_sha256}
+            if config.execution_authority_path else None
+        ),
         "transport_status": "prepared",
+        "mutation": {"status": "unproven", "evidence": None},
         "task_outcome_contract": config.task_outcome_contract,
         "task_outcome": "not_applicable" if is_attachment_transport(config.transport) else "pending",
         "task_outcome_reason": None,
@@ -732,7 +875,7 @@ def browser_temp_environment(
     base_env: dict[str, str] | None = None,
 ) -> dict[str, str]:
     root = browser_temp_path.expanduser().resolve()
-    root.mkdir(parents=True, exist_ok=True)
+    ensure_directory_durable(root, _platform_name=platform_name)
     marker = {
         "schema": "codex.chatgpt.oracle-browser-temp-owner/v1",
         "controller_pid": os.getpid(),
@@ -796,11 +939,453 @@ def cleanup_prior_boot_browser_temps(
     return cleaned
 
 
+def _write_temp_file_durable(path: Path, data: bytes) -> None:
+    try:
+        with path.open("xb") as handle:
+            handle.write(data)
+            handle.flush()
+            os.fsync(handle.fileno())
+    except OSError as exc:
+        raise OracleStateError(
+            "DURABLE_JSON_TEMP_WRITE_FAILED", "temporary JSON file was not durably written", {"path": str(path)}
+        ) from exc
+
+
+def _windows_flush_path(path: Path, *, directory: bool) -> None:
+    from ctypes import wintypes
+
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    create_file = kernel32.CreateFileW
+    create_file.argtypes = [
+        wintypes.LPCWSTR,
+        wintypes.DWORD,
+        wintypes.DWORD,
+        wintypes.LPVOID,
+        wintypes.DWORD,
+        wintypes.DWORD,
+        wintypes.HANDLE,
+    ]
+    create_file.restype = wintypes.HANDLE
+    flush = kernel32.FlushFileBuffers
+    flush.argtypes = [wintypes.HANDLE]
+    flush.restype = wintypes.BOOL
+    close = kernel32.CloseHandle
+    close.argtypes = [wintypes.HANDLE]
+    close.restype = wintypes.BOOL
+    access = 0x80000000 if directory else 0x40000000  # GENERIC_READ / GENERIC_WRITE
+    flags = 0x02000000 if directory else 0x00000080  # BACKUP_SEMANTICS / NORMAL
+    handle = create_file(
+        str(path),
+        access,
+        0x00000001 | 0x00000002 | 0x00000004,
+        None,
+        3,
+        flags,
+        None,
+    )
+    invalid = ctypes.c_void_p(-1).value
+    if handle == invalid:
+        error = ctypes.get_last_error()
+        raise OracleStateError(
+            "WINDOWS_FLUSH_HANDLE_FAILED",
+            "Windows durable handle could not be opened",
+            {"path": str(path), "directory": directory, "winerror": error},
+        )
+    try:
+        if not flush(handle):
+            error = ctypes.get_last_error()
+            raise OracleStateError(
+                "WINDOWS_FLUSH_FAILED",
+                "FlushFileBuffers failed",
+                {"path": str(path), "directory": directory, "winerror": error},
+            )
+    finally:
+        close(handle)
+
+
+def _windows_move_write_through(source: Path, destination: Path, *, replace: bool) -> None:
+    from ctypes import wintypes
+
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    move = kernel32.MoveFileExW
+    move.argtypes = [wintypes.LPCWSTR, wintypes.LPCWSTR, wintypes.DWORD]
+    move.restype = wintypes.BOOL
+    flags = 0x8 | (0x1 if replace else 0)
+    if not move(str(source), str(destination), flags):
+        raise OSError(ctypes.get_last_error(), "MoveFileExW")
+
+
+def _atomic_replace_durable(
+    temporary: Path, destination: Path, *, platform_name: str
+) -> dict[str, Any]:
+    try:
+        if platform_name == "nt":
+            _windows_move_write_through(temporary, destination, replace=True)
+            return {"method": "MoveFileExW", "write_through": True}
+        os.replace(temporary, destination)
+        return {"method": "os.replace", "write_through": False}
+    except OSError as exc:
+        raise OracleStateError(
+            "DURABLE_JSON_REPLACE_FAILED", "atomic JSON replacement failed", {"path": str(destination)}
+        ) from exc
+
+
+def _sync_parent_directory_durable(parent: Path, *, platform_name: str) -> dict[str, Any]:
+    if platform_name == "nt":
+        try:
+            _windows_flush_path(parent, directory=True)
+            return {
+                "durable": True,
+                "method": "FlushFileBuffers-directory+MoveFileExW-write-through",
+                "directory_flush_supported": True,
+                "boundary": None,
+            }
+        except OracleStateError as exc:
+            winerror = int(exc.evidence.get("winerror") or 0)
+            if winerror not in {1, 5, 6, 50, 87}:
+                raise
+            return {
+                "durable": True,
+                "method": "MoveFileExW-write-through",
+                "directory_flush_supported": False,
+                "boundary": (
+                    "Windows did not expose a flushable directory handle; parent-entry durability "
+                    "relies on MoveFileExW MOVEFILE_WRITE_THROUGH."
+                ),
+                "winerror": winerror,
+            }
+    flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
+    try:
+        descriptor = os.open(parent, flags)
+        try:
+            os.fsync(descriptor)
+        finally:
+            os.close(descriptor)
+    except OSError as exc:
+        raise OracleStateError(
+            "DURABLE_JSON_PARENT_FSYNC_FAILED",
+            "parent directory fsync failed",
+            {"path": str(parent)},
+        ) from exc
+    return {
+        "durable": True,
+        "method": "fsync-directory",
+        "directory_flush_supported": True,
+        "boundary": None,
+    }
+
+
+def _create_directory_entry_durable(
+    path: Path, *, platform_name: str
+) -> dict[str, Any]:
+    if path.exists():
+        raise OracleStateError(
+            "DURABLE_DIRECTORY_CREATION_RACE",
+            "directory entry appeared during durable creation",
+            {"path": str(path)},
+        )
+    temporary: Path | None = None
+    try:
+        if platform_name == "nt":
+            temporary = path.parent / f".{path.name}.mkdir.{uuid.uuid4().hex}"
+            temporary.mkdir(mode=0o700)
+            _windows_move_write_through(temporary, path, replace=False)
+            creation = {"method": "MoveFileExW-directory", "write_through": True}
+        else:
+            path.mkdir(mode=0o700)
+            creation = {"method": "mkdir", "write_through": False}
+        parent_receipt = _sync_parent_directory_durable(
+            path.parent, platform_name=platform_name
+        )
+    except Exception:
+        if temporary is not None:
+            try:
+                temporary.rmdir()
+            except OSError:
+                pass
+        raise
+    return {
+        "path": str(path),
+        "creation": creation,
+        "parent_directory": parent_receipt,
+        "durable": bool(parent_receipt.get("durable")),
+    }
+
+
+def ensure_directory_durable(
+    path: Path, *, _platform_name: str | None = None
+) -> dict[str, Any]:
+    """Create every missing ancestor one at a time and persist each parent entry."""
+
+    platform_name = os.name if _platform_name is None else _platform_name
+    target = Path(path)
+    missing: list[Path] = []
+    current = target
+    while not current.exists():
+        if current.parent == current:
+            raise OracleStateError(
+                "DURABLE_DIRECTORY_ROOT_MISSING", "no existing ancestor for durable directory creation"
+            )
+        missing.append(current)
+        current = current.parent
+    if not current.is_dir():
+        raise OracleStateError(
+            "DURABLE_DIRECTORY_PARENT_INVALID", "existing ancestor is not a directory", {"path": str(current)}
+        )
+    created: list[dict[str, Any]] = []
+    for directory in reversed(missing):
+        created.append(
+            _create_directory_entry_durable(directory, platform_name=platform_name)
+        )
+    return {
+        "durable": all(item.get("durable") is True for item in created),
+        "path": str(target),
+        "created": created,
+        "existing_ancestor": str(current),
+        "boundary": next(
+            (
+                item["parent_directory"].get("boundary")
+                for item in created
+                if item["parent_directory"].get("boundary")
+            ),
+            None,
+        ),
+    }
+
+
+def write_bytes_atomic_durable(
+    path: Path,
+    data: bytes,
+    *,
+    _platform_name: str | None = None,
+) -> dict[str, Any]:
+    """Persist bytes through a file flush, atomic replacement, and parent boundary.
+
+    POSIX requires a successful parent-directory fsync. Windows uses
+    MoveFileExW(MOVEFILE_WRITE_THROUGH) and FlushFileBuffers on the destination;
+    when Windows refuses a directory FlushFileBuffers handle, the returned
+    receipt explicitly records that limitation instead of claiming that a
+    portable directory-fsync primitive ran.
+    """
+    platform_name = os.name if _platform_name is None else _platform_name
+    destination = Path(path)
+    parent_creation = ensure_directory_durable(
+        destination.parent, _platform_name=platform_name
+    )
+    if not isinstance(data, bytes):
+        raise OracleStateError("DURABLE_BYTES_REQUIRED", "durable byte writer requires bytes")
+    temporary = destination.with_name(
+        f"{destination.name}.tmp.{os.getpid()}.{uuid.uuid4().hex}"
+    )
+    try:
+        _write_temp_file_durable(temporary, data)
+        replace_receipt = _atomic_replace_durable(
+            temporary, destination, platform_name=platform_name
+        )
+        if platform_name == "nt":
+            _windows_flush_path(destination, directory=False)
+        file_flush = {
+            "durable": True,
+            "method": "FlushFileBuffers" if platform_name == "nt" else "fsync-before-replace",
+        }
+        parent_receipt = _sync_parent_directory_durable(
+            destination.parent, platform_name=platform_name
+        )
+    except Exception:
+        try:
+            temporary.unlink(missing_ok=True)
+        except OSError:
+            pass
+        raise
+    return {
+        "durable": bool(file_flush["durable"] and parent_receipt["durable"]),
+        "path": str(destination),
+        "bytes": len(data),
+        "sha256": hashlib.sha256(data).hexdigest(),
+        "file_flush": file_flush,
+        "replace": replace_receipt,
+        "parent_directory": parent_receipt,
+        "parent_creation": parent_creation,
+    }
+
+
+def write_text_atomic_durable(
+    path: Path,
+    text: str,
+    *,
+    encoding: str = "utf-8",
+    newline: str | None = None,
+    _platform_name: str | None = None,
+) -> dict[str, Any]:
+    if not isinstance(text, str):
+        raise OracleStateError("DURABLE_TEXT_REQUIRED", "durable text writer requires text")
+    # Match text I/O newline translation; ``newline`` controls translation and
+    # never means "append a trailing newline".
+    value = text
+    if newline not in {None, "", "\n"}:
+        value = value.replace("\n", newline)
+    return write_bytes_atomic_durable(
+        path, value.encode(encoding, errors="strict"), _platform_name=_platform_name
+    )
+
+
+def write_json_atomic_durable(
+    path: Path,
+    payload: dict[str, Any],
+    *,
+    _platform_name: str | None = None,
+) -> dict[str, Any]:
+    data = (json.dumps(payload, ensure_ascii=False, indent=2) + "\n").encode("utf-8")
+    return write_bytes_atomic_durable(path, data, _platform_name=_platform_name)
+
+
 def write_json_atomic(path: Path, payload: dict[str, Any]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    temporary = path.with_name(f"{path.name}.tmp.{os.getpid()}.{uuid.uuid4().hex}")
-    temporary.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-    os.replace(temporary, path)
+    receipt = write_json_atomic_durable(path, payload)
+    if not receipt.get("durable"):
+        raise OracleStateError(
+            "DURABLE_JSON_WRITE_FAILED", "JSON write did not reach the required durability boundary"
+        )
+
+
+def sync_existing_file_durable(
+    path: Path, *, _platform_name: str | None = None
+) -> dict[str, Any]:
+    """Flush an externally written file before its bytes are hash-referenced."""
+
+    platform_name = os.name if _platform_name is None else _platform_name
+    target = Path(path)
+    if not target.is_file():
+        raise OracleStateError(
+            "DURABLE_FILE_MISSING",
+            "file durability was requested for a missing or non-file path",
+            {"path": str(target)},
+        )
+    try:
+        if platform_name == "nt":
+            _windows_flush_path(target, directory=False)
+            method = "FlushFileBuffers"
+        else:
+            descriptor = os.open(target, os.O_RDONLY)
+            try:
+                os.fsync(descriptor)
+            finally:
+                os.close(descriptor)
+            method = "fsync-file"
+        parent_receipt = _sync_parent_directory_durable(
+            target.parent, platform_name=platform_name
+        )
+    except OracleStateError:
+        raise
+    except OSError as exc:
+        raise OracleStateError(
+            "DURABLE_FILE_FSYNC_FAILED",
+            "file bytes could not be durably flushed",
+            {"path": str(target)},
+        ) from exc
+    return {
+        "durable": bool(parent_receipt.get("durable")),
+        "path": str(target),
+        "bytes": target.stat().st_size,
+        "sha256": sha256_file(target),
+        "file_flush": {"durable": True, "method": method},
+        "parent_directory": parent_receipt,
+    }
+
+
+def copy_file_atomic_durable(
+    source: Path,
+    destination: Path,
+    *,
+    _platform_name: str | None = None,
+) -> dict[str, Any]:
+    """Durably copy a file without loading an unbounded artifact into memory."""
+
+    platform_name = os.name if _platform_name is None else _platform_name
+    source_path = Path(source)
+    target = Path(destination)
+    if not source_path.is_file():
+        raise OracleStateError(
+            "DURABLE_COPY_SOURCE_MISSING",
+            "durable copy source is missing",
+            {"path": str(source_path)},
+        )
+    parent_creation = ensure_directory_durable(
+        target.parent, _platform_name=platform_name
+    )
+    temporary = target.with_name(f"{target.name}.tmp.{os.getpid()}.{uuid.uuid4().hex}")
+    try:
+        with source_path.open("rb") as source_handle, temporary.open("xb") as target_handle:
+            shutil.copyfileobj(source_handle, target_handle)
+            target_handle.flush()
+            os.fsync(target_handle.fileno())
+        replace_receipt = _atomic_replace_durable(
+            temporary, target, platform_name=platform_name
+        )
+        if platform_name == "nt":
+            _windows_flush_path(target, directory=False)
+        parent_receipt = _sync_parent_directory_durable(
+            target.parent, platform_name=platform_name
+        )
+    except Exception:
+        try:
+            temporary.unlink(missing_ok=True)
+        except OSError:
+            pass
+        raise
+    return {
+        "durable": bool(parent_receipt.get("durable")),
+        "path": str(target),
+        "bytes": target.stat().st_size,
+        "sha256": sha256_file(target),
+        "file_flush": {
+            "durable": True,
+            "method": "FlushFileBuffers" if platform_name == "nt" else "fsync-before-replace",
+        },
+        "replace": replace_receipt,
+        "parent_directory": parent_receipt,
+        "parent_creation": parent_creation,
+    }
+
+
+def promote_file_atomic_durable(
+    source: Path,
+    destination: Path,
+    *,
+    _platform_name: str | None = None,
+) -> dict[str, Any]:
+    """Flush and atomically move a same-volume candidate into final position."""
+
+    platform_name = os.name if _platform_name is None else _platform_name
+    source_path = Path(source)
+    target = Path(destination)
+    source_receipt = sync_existing_file_durable(
+        source_path, _platform_name=platform_name
+    )
+    parent_creation = ensure_directory_durable(
+        target.parent, _platform_name=platform_name
+    )
+    replace_receipt = _atomic_replace_durable(
+        source_path, target, platform_name=platform_name
+    )
+    if platform_name == "nt":
+        _windows_flush_path(target, directory=False)
+    parent_receipt = _sync_parent_directory_durable(
+        target.parent, platform_name=platform_name
+    )
+    return {
+        "durable": bool(parent_receipt.get("durable")),
+        "path": str(target),
+        "bytes": target.stat().st_size,
+        "sha256": sha256_file(target),
+        "source_flush": source_receipt,
+        "replace": replace_receipt,
+        "file_flush": {
+            "durable": True,
+            "method": "FlushFileBuffers" if platform_name == "nt" else "fsync-before-replace",
+        },
+        "parent_directory": parent_receipt,
+        "parent_creation": parent_creation,
+    }
 
 
 def load_state(path: Path) -> dict[str, Any]:
@@ -829,6 +1414,8 @@ def update_state(
     conversation_url: str | None = None,
     conversation_url_conflict: dict[str, str] | None = None,
     exact_live_observation: bool = False,
+    mutation: dict[str, Any] | None = None,
+    power_loss_durability: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     if status not in STATUSES:
         raise OracleStateError("STATUS_INVALID", "invalid Oracle run status")
@@ -841,22 +1428,12 @@ def update_state(
         current_authority = str(payload.get("session_authority") or "")
         current_rank = SESSION_AUTHORITY_RANK.get(current_authority, -1)
         requested_rank = SESSION_AUTHORITY_RANK.get(session_authority, -1)
-        # A terminal observation without a harvested artifact is provisional:
-        # an exact later live observation is stronger evidence that the same
-        # conversation is still generating.  Never apply this exception to a
-        # durably harvested terminal result.
-        restore_live = (
-            exact_live_observation
-            and current_authority == "terminal_observed"
-            and session_authority == "live"
-            and payload.get("terminal_harvested") is not True
-        )
         payload["session_authority"] = (
             session_authority
-            if restore_live or current_rank <= requested_rank
+            if current_rank <= requested_rank
             else current_authority
         )
-        if current_rank > requested_rank and not restore_live and status == "running":
+        if current_rank > requested_rank and status == "running":
             payload["status"] = (
                 "complete"
                 if current_authority == "terminal" and payload.get("terminal_harvested") is True
@@ -872,6 +1449,17 @@ def update_state(
         payload["task_outcome"] = task_outcome
     if task_outcome_reason is not None:
         payload["task_outcome_reason"] = task_outcome_reason
+    if mutation is not None:
+        mutation_status = str(mutation.get("status") or "").strip().casefold()
+        if mutation_status not in {"unproven", "none", "intent", "applied", "partial", "failed"}:
+            raise OracleStateError("MUTATION_STATUS_INVALID", "invalid mutation status")
+        payload["mutation"] = dict(mutation)
+    if power_loss_durability is not None:
+        existing_durability = payload.get("power_loss_durability")
+        payload["power_loss_durability"] = {
+            **(existing_durability if isinstance(existing_durability, dict) else {}),
+            **power_loss_durability,
+        }
     if host_watchdog is not None:
         payload["host_watchdog"] = host_watchdog
     if conversation_url is not None:
@@ -2311,6 +2899,80 @@ def proven_pre_submit_model_switcher_failure(state_path: Path) -> dict[str, Any]
     }
 
 
+def verify_fallback_authority_state(state: dict[str, Any]) -> dict[str, Any] | None:
+    """Revalidate an immutable one-shot attachment authority before recovery."""
+    reference = state.get("fallback_authority")
+    if reference is None:
+        return None
+    if not isinstance(reference, dict) or set(reference) != {"path", "sha256"}:
+        raise OracleStateError("FALLBACK_AUTHORITY_STATE_INVALID", "stored fallback authority reference is invalid")
+    path = exact_regular_file(reference.get("path"), label="fallback_authority.path")
+    expected_sha = str(reference.get("sha256") or "").strip().casefold()
+    if re.fullmatch(r"[a-f0-9]{64}", expected_sha) is None or sha256_file(path) != expected_sha:
+        raise OracleStateError("FALLBACK_AUTHORITY_STATE_HASH_MISMATCH", "stored fallback authority bytes changed")
+    if not is_within(oracle_state_root() / "attachment-fallbacks", path):
+        raise OracleStateError("FALLBACK_AUTHORITY_STATE_PATH_INVALID", "stored fallback authority path is outside host state")
+    try:
+        value = json.loads(path.read_text(encoding="utf-8", errors="strict"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise OracleStateError("FALLBACK_AUTHORITY_STATE_JSON_INVALID", "stored fallback authority is invalid JSON") from exc
+    profile = state.get("profile") if isinstance(state.get("profile"), dict) else {}
+    mission = state.get("mission") if isinstance(state.get("mission"), dict) else {}
+    attachments = state.get("attachments") if isinstance(state.get("attachments"), list) else []
+    exact_attachments = [
+        {"path": item.get("path"), "sha256": item.get("sha256")}
+        for item in attachments
+        if isinstance(item, dict)
+    ]
+    if (
+        not isinstance(value, dict)
+        or value.get("schema") != FALLBACK_AUTHORITY_SCHEMA
+        or value.get("consumed") is not True
+        or value.get("fallback_run_id") != state.get("run_id")
+        or value.get("project_root") != state.get("project_root")
+        or value.get("action_authority") != state.get("action_authority")
+        or value.get("thinking_time") != profile.get("thinking_time")
+        or value.get("instruction_sha256") != mission.get("sha256")
+        or value.get("attachments") != exact_attachments
+    ):
+        raise OracleStateError("FALLBACK_AUTHORITY_STATE_BINDING_MISMATCH", "stored fallback authority binding changed")
+    return value
+
+
+def verify_execution_authority_state(state: dict[str, Any]) -> dict[str, Any] | None:
+    """Revalidate a dispatch episode claim used for post-recovery host acceptance."""
+    reference = state.get("execution_authority")
+    if reference is None:
+        return None
+    if not isinstance(reference, dict) or set(reference) != {"path", "sha256"}:
+        raise OracleStateError("EXECUTION_AUTHORITY_STATE_INVALID", "stored execution authority reference is invalid")
+    path = exact_regular_file(reference.get("path"), label="execution_authority.path")
+    expected_sha = str(reference.get("sha256") or "").strip().casefold()
+    if re.fullmatch(r"[a-f0-9]{64}", expected_sha) is None or sha256_file(path) != expected_sha:
+        raise OracleStateError("EXECUTION_AUTHORITY_STATE_HASH_MISMATCH", "stored execution authority bytes changed")
+    if not is_within(oracle_state_root() / "dispatcher-episodes", path):
+        raise OracleStateError("EXECUTION_AUTHORITY_STATE_PATH_INVALID", "stored execution authority is outside host state")
+    try:
+        value = json.loads(path.read_text(encoding="utf-8", errors="strict"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise OracleStateError("EXECUTION_AUTHORITY_STATE_JSON_INVALID", "stored execution authority is invalid JSON") from exc
+    profile = state.get("profile") if isinstance(state.get("profile"), dict) else {}
+    mission = state.get("mission") if isinstance(state.get("mission"), dict) else {}
+    if (
+        not isinstance(value, dict)
+        or value.get("schema") != EXECUTION_AUTHORITY_SCHEMA
+        or value.get("claimed") is not True
+        or value.get("run_id") != state.get("run_id")
+        or value.get("project_root") != state.get("project_root")
+        or value.get("mission_path") != mission.get("path")
+        or value.get("mission_sha256") != mission.get("sha256")
+        or value.get("action_authority") != state.get("action_authority")
+        or value.get("thinking_time") != profile.get("thinking_time")
+    ):
+        raise OracleStateError("EXECUTION_AUTHORITY_STATE_BINDING_MISMATCH", "stored execution authority binding changed")
+    return value
+
+
 def proven_pre_submit_connector_failure(state_path: Path) -> dict[str, Any] | None:
     """Prove the qualified DevSpace selector failed before any prompt send."""
     state = load_state(state_path)
@@ -2318,7 +2980,7 @@ def proven_pre_submit_connector_failure(state_path: Path) -> dict[str, Any] | No
         return None
     if state.get("terminal_harvested") is True or _state_has_conversation_url(state):
         return None
-    if str(state.get("mode") or "") != "browser" or not is_pro_readonly_transport(
+    if str(state.get("mode") or "") != "browser" or not is_devspace_transport(
         str(state.get("transport") or "")
     ):
         return None
@@ -2328,7 +2990,8 @@ def proven_pre_submit_connector_failure(state_path: Path) -> dict[str, Any] | No
     if (
         str(profile.get("model") or "") != "gpt-5.6-sol"
         or str(profile.get("model_strategy") or "") != "select"
-        or str(profile.get("thinking_time") or "") != "heavy"
+        or str(profile.get("thinking_time") or "")
+        not in {"light", "standard", "extended", "extra-high", "heavy"}
         or str(oracle.get("resolved_version") or "").removeprefix("oracle ").strip()
         != ORACLE_CUSTOM_PACKAGE_VERSION
         or not locator
@@ -2391,8 +3054,8 @@ def proven_pre_submit_connector_failure(state_path: Path) -> dict[str, Any] | No
         or not str(meta.get("completedAt") or "").strip()
         or config.get("desiredModel") != "GPT-5.6 Sol"
         or config.get("modelStrategy") != "select"
-        or config.get("thinkingTime") != "heavy"
-        or options.get("model") != "gpt-5.6-sol"
+        or config.get("thinkingTime") != profile.get("thinking_time")
+        or options.get("model") != profile.get("model")
         or options.get("slug") != locator
         or runtime.get("promptSubmitted") is not False
         or runtime.get("tabUrl") not in {None, "https://chatgpt.com/"}
@@ -2826,7 +3489,7 @@ def unresolved_project_sessions(
     return owners
 
 
-def write_transcript(layout: RunLayout) -> None:
+def write_transcript(layout: RunLayout) -> dict[str, Any]:
     chunks = []
     for source in (layout.stdout_path, layout.stderr_path):
         try:
@@ -2839,7 +3502,7 @@ def write_transcript(layout: RunLayout) -> None:
         data = layout.output_path.read_bytes()
         if data:
             chunks.append(data.rstrip() + b"\n")
-    layout.transcript_path.write_bytes(b"".join(chunks))
+    return write_bytes_atomic_durable(layout.transcript_path, b"".join(chunks))
 
 
 def windows_subprocess_kwargs(*, platform_name: str | None = None) -> dict[str, Any]:

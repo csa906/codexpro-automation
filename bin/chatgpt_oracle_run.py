@@ -7,7 +7,6 @@ import json
 import math
 import os
 import re
-import shutil
 import subprocess
 import sys
 import time
@@ -133,7 +132,7 @@ def build_oracle_argv(config, layout, prompt: str) -> list[str]:
         ]
     if config.copy_profile is not None:
         command[command.index("--slug"):command.index("--slug")] = ["--copy-profile", str(config.copy_profile)]
-    if not STATE.is_pro_transport(config.transport) and any(
+    if not STATE.is_attachment_transport(config.transport) and any(
         item == "--file" or item.startswith("--file=") or item == "-f" for item in command
     ):
         raise OracleRunError("FILE_TRANSPORT_FORBIDDEN", "general GPT browser runs must not use --file")
@@ -249,7 +248,7 @@ def isolated_oracle_environment(
             "isolated Oracle npm prefix must remain inside host-only Oracle state",
             {"prefix": str(prefix), "state_root": str(state_root)},
         )
-    prefix.mkdir(parents=True, exist_ok=True)
+    STATE.ensure_directory_durable(prefix)
     for key in tuple(env):
         if key.casefold() == "npm_config_prefix":
             del env[key]
@@ -334,9 +333,12 @@ def dry_run_payload(config, layout, argv: Sequence[str], prompt: str) -> dict[st
 
 
 def append_error(path: Path, message: str) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
+    STATE.ensure_directory_durable(path.parent)
     with path.open("ab") as handle:
         handle.write((message.rstrip() + "\n").encode("utf-8", errors="replace"))
+        handle.flush()
+        os.fsync(handle.fileno())
+    STATE.sync_existing_file_durable(path)
 
 
 SESSION_STATE_RE = re.compile(r"(?im)^\s*State:\s*([a-z][a-z0-9_-]*)\s*$")
@@ -620,16 +622,16 @@ def promote_terminal_harvest_candidate(
     output_path = Path(str(artifacts.get("output") or directory / "output.md")).resolve()
     if output_path != (directory / "output.md").resolve() or output_path.exists():
         raise OracleRunError("PROMOTION_OUTPUT_PATH_INVALID", "exact run output path is unavailable")
-    temporary = output_path.with_name(f".{output_path.name}.promote-{os.getpid()}.tmp")
-    try:
-        with candidate.open("rb") as source, temporary.open("xb") as destination:
-            shutil.copyfileobj(source, destination)
-            destination.flush()
-            os.fsync(destination.fileno())
-        os.replace(temporary, output_path)
-    finally:
-        if temporary.exists():
-            temporary.unlink()
+    output_durability = STATE.copy_file_atomic_durable(candidate, output_path)
+    if output_durability.get("sha256") != actual_sha256:
+        raise OracleRunError(
+            "PROMOTION_OUTPUT_HASH_MISMATCH",
+            "durable promoted output differs from the validated candidate",
+            {
+                "expected": actual_sha256,
+                "actual": output_durability.get("sha256"),
+            },
+        )
     layout = STATE.RunLayout(
         str(state["run_id"]), str((state.get("oracle") or {}).get("slug") or ""), directory,
         state_path, output_path, Path(str(artifacts.get("transcript") or directory / "transcript.md")),
@@ -637,7 +639,7 @@ def promote_terminal_harvest_candidate(
         Path(str(artifacts.get("stderr") or directory / "stderr.log")),
         Path(str(artifacts.get("browser_temp") or directory / "browser-temp")).resolve(),
     )
-    STATE.write_transcript(layout)
+    transcript_durability = STATE.write_transcript(layout)
     task_outcome = STATE.classify_task_outcome(
         output_path,
         contract=str(state.get("task_outcome_contract") or "legacy"),
@@ -647,6 +649,10 @@ def promote_terminal_harvest_candidate(
         state_path, status="complete", exit_code=state.get("exit_code"), session_authority="terminal",
         terminal_harvested=True, artifact_sha256=actual_sha256, transport_status="complete",
         task_outcome=task_outcome, task_outcome_reason="deterministic-terminal-candidate-promotion",
+        power_loss_durability={
+            "output": output_durability,
+            "transcript": transcript_durability,
+        },
     )
     return {"ok": True, "status": "complete", "run_dir": str(directory), "output_path": str(output_path),
             "candidate_path": str(candidate), "artifact_sha256": actual_sha256, "result": updated}
@@ -702,11 +708,30 @@ def execute_run(
                 "attachment bytes changed after manifest validation",
                 {"path": str(attachment), "expected": expected, "actual": actual},
             )
-    layout.run_dir.mkdir(parents=True, exist_ok=False)
-    transport_mission_path.write_bytes(mission_bytes)
-    STATE.write_json_atomic(layout.state_path, STATE.state_payload(config, layout, status="prepared", resolved_version="unresolved"))
-    layout.stdout_path.touch()
-    layout.stderr_path.touch()
+    if layout.run_dir.exists():
+        raise FileExistsError(f"Oracle run directory already exists: {layout.run_dir}")
+    run_directory_durability = STATE.ensure_directory_durable(
+        layout.run_dir, _platform_name=platform_name
+    )
+    mission_durability = STATE.write_bytes_atomic_durable(
+        transport_mission_path, mission_bytes, _platform_name=platform_name
+    )
+    stdout_initial_durability = STATE.write_bytes_atomic_durable(
+        layout.stdout_path, b"", _platform_name=platform_name
+    )
+    stderr_initial_durability = STATE.write_bytes_atomic_durable(
+        layout.stderr_path, b"", _platform_name=platform_name
+    )
+    prepared_payload = STATE.state_payload(
+        config, layout, status="prepared", resolved_version="unresolved"
+    )
+    prepared_payload["power_loss_durability"] = {
+        "run_directory": run_directory_durability,
+        "transport_mission": mission_durability,
+        "stdout_initial": stdout_initial_durability,
+        "stderr_initial": stderr_initial_durability,
+    }
+    STATE.write_json_atomic(layout.state_path, prepared_payload)
     oracle_env = isolated_oracle_environment(
         STATE.browser_temp_environment(layout.browser_temp_path, platform_name=platform_name),
         config.oracle_command,
@@ -715,6 +740,7 @@ def execute_run(
     exit_code: int | None = None
     watchdog_expired = False
     oracle_process_pid: int | None = None
+    runtime_durability: dict[str, Any] = {}
     try:
         version = resolve_oracle_version(
             config.oracle_command,
@@ -744,8 +770,20 @@ def execute_run(
             else "ORACLE_VERSION_TIMEOUT: " if isinstance(exc, subprocess.TimeoutExpired) else ""
         )
         append_error(layout.stderr_path, f"version resolution failed: {code}{exc}")
-        STATE.write_transcript(layout)
-        failed = STATE.update_state(layout.state_path, status="failed")
+        pre_submit_durability = {
+            "stdout": STATE.sync_existing_file_durable(
+                layout.stdout_path, _platform_name=platform_name
+            ),
+            "stderr": STATE.sync_existing_file_durable(
+                layout.stderr_path, _platform_name=platform_name
+            ),
+        }
+        pre_submit_durability["transcript"] = STATE.write_transcript(layout)
+        failed = STATE.update_state(
+            layout.state_path,
+            status="failed",
+            power_loss_durability=pre_submit_durability,
+        )
         settled = STATE.settle_proven_pre_submit_failure(layout.state_path)
         if settled is not None:
             STATE.cleanup_owned_browser_temp(layout.browser_temp_path)
@@ -802,6 +840,26 @@ def execute_run(
                             "attachment bytes changed after manifest validation",
                             {"path": str(attachment), "expected": expected, "actual": actual},
                         )
+                # Persist submission-may-exist authority before process
+                # creation. A host crash after Popen must never leave a
+                # launched browser represented as safely pre-submit.
+                STATE.update_state(
+                    layout.state_path,
+                    status="running",
+                    resolved_version=version,
+                    session_authority="submitted_unknown",
+                    transport_status="launching",
+                    host_watchdog=(
+                        {
+                            "status": "arming",
+                            "timeout_seconds": watchdog_timeout_seconds,
+                            "oracle_process_pid": None,
+                            "process_action": "submission-may-exist",
+                        }
+                        if watchdog_timeout_seconds is not None
+                        else {"status": "disabled-for-pro", "process_action": "submission-may-exist"}
+                    ),
+                )
                 process = popen_factory(
                     argv,
                     cwd=str(config.project_root),
@@ -818,7 +876,6 @@ def execute_run(
                     layout.state_path,
                     status="running",
                     resolved_version=version,
-                    session_authority="submitted_unknown",
                     host_watchdog=(
                         {
                             "status": "armed",
@@ -838,15 +895,47 @@ def execute_run(
                 exit_code, watchdog_expired = wait_for_oracle_process(
                     process, watchdog_timeout_seconds
                 )
+        runtime_durability["stdout"] = STATE.sync_existing_file_durable(
+            layout.stdout_path, _platform_name=platform_name
+        )
+        runtime_durability["stderr"] = STATE.sync_existing_file_durable(
+            layout.stderr_path, _platform_name=platform_name
+        )
+        if layout.output_path.is_file():
+            runtime_durability["output"] = STATE.sync_existing_file_durable(
+                layout.output_path, _platform_name=platform_name
+            )
     except Exception as exc:
         code = f"{exc.code}: " if isinstance(exc, OracleRunError) else ""
         append_error(layout.stderr_path, f"Oracle launch/run failed: {code}{exc}")
-        STATE.write_transcript(layout)
+        if layout.stdout_path.is_file():
+            runtime_durability["stdout"] = STATE.sync_existing_file_durable(
+                layout.stdout_path, _platform_name=platform_name
+            )
+        runtime_durability["stderr"] = STATE.sync_existing_file_durable(
+            layout.stderr_path, _platform_name=platform_name
+        )
+        runtime_durability["transcript"] = STATE.write_transcript(layout)
         latest = STATE.load_state(layout.state_path)
         if latest.get("session_authority") == "pre_submit":
             STATE.cleanup_owned_browser_temp(layout.browser_temp_path)
-        return {"ok": False, "run_dir": str(layout.run_dir), "result": STATE.update_state(layout.state_path, status="failed")}
-    STATE.write_transcript(layout)
+        return {
+            "ok": False,
+            "run_dir": str(layout.run_dir),
+            "result": STATE.update_state(
+                layout.state_path,
+                status="failed",
+                power_loss_durability=runtime_durability,
+            ),
+        }
+    runtime_durability["transcript"] = STATE.write_transcript(layout)
+    latest = STATE.load_state(layout.state_path)
+    STATE.update_state(
+        layout.state_path,
+        status=str(latest.get("status") or "attention_required"),
+        exit_code=latest.get("exit_code"),
+        power_loss_durability=runtime_durability,
+    )
     if watchdog_expired:
         state = STATE.update_state(
             layout.state_path,
@@ -919,7 +1008,7 @@ def execute_run(
             exit_code=exit_code,
             session_authority="terminal",
             terminal_harvested=True,
-            artifact_sha256=STATE.sha256_file(layout.output_path),
+            artifact_sha256=str(runtime_durability["output"]["sha256"]),
             transport_status="complete",
             task_outcome=task_outcome,
             task_outcome_reason=(
@@ -1021,7 +1110,7 @@ def _recover_run_locked(
         }
     historical_authority = historical_session_authority(directory, state)
     historical_url = historical_conversation_url(directory, state)
-    terminal_evidence_revoked = (
+    observer_disagreement = (
         historical_authority == "live"
         and str(state.get("session_authority") or "") in {"terminal_observed", "terminal"}
     )
@@ -1029,11 +1118,11 @@ def _recover_run_locked(
         STATE.SESSION_AUTHORITY_RANK.get(historical_authority, -1)
         > STATE.SESSION_AUTHORITY_RANK.get(str(state.get("session_authority") or ""), -1)
         or (historical_url and not str((state.get("oracle") or {}).get("conversation_url") or "").strip())
-        or terminal_evidence_revoked
+        or observer_disagreement
     ):
         reconciled_status = (
-            "running"
-            if terminal_evidence_revoked
+            "attention_required"
+            if observer_disagreement
             else "complete"
             if state.get("status") == "complete"
             and state.get("session_authority") == "terminal"
@@ -1045,18 +1134,22 @@ def _recover_run_locked(
             directory / "state.json",
             status=reconciled_status,
             exit_code=state.get("exit_code"),
-            session_authority=historical_authority,
-            terminal_harvested=False if terminal_evidence_revoked else state.get("terminal_harvested"),
-            artifact_sha256=None if terminal_evidence_revoked else state.get("artifact_sha256"),
+            session_authority=(
+                str(state.get("session_authority") or "terminal_observed")
+                if observer_disagreement
+                else historical_authority
+            ),
+            terminal_harvested=state.get("terminal_harvested"),
+            artifact_sha256=state.get("artifact_sha256"),
             transport_status=(
-                "post_submit_provider_delivery_timeout"
-                if terminal_evidence_revoked
+                "terminal_observer_disagreement"
+                if observer_disagreement
                 else state.get("transport_status")
             ),
-            task_outcome="pending" if terminal_evidence_revoked else state.get("task_outcome"),
+            task_outcome=state.get("task_outcome"),
             task_outcome_reason=(
-                "provider-delivery-timeout-passive-wait"
-                if terminal_evidence_revoked
+                "exact-live-observation-after-terminal-observation"
+                if observer_disagreement
                 else state.get("task_outcome_reason")
             ),
             conversation_url=historical_url,
@@ -1078,9 +1171,16 @@ def _recover_run_locked(
             "monotonic_noop": True,
         }
     oracle = state.get("oracle") if isinstance(state.get("oracle"), dict) else {}
-    locator = str(oracle.get("session_locator") or oracle.get("slug") or "").strip()
-    if not locator:
+    slug = str(oracle.get("slug") or "").strip()
+    locator = str(oracle.get("session_locator") or "").strip()
+    if not slug or not locator:
         raise OracleRunError("SESSION_LOCATOR_MISSING", "run state has no Oracle session locator")
+    if locator != slug:
+        raise OracleRunError(
+            "SESSION_LOCATOR_MISMATCH",
+            "stored Oracle slug and session locator differ; recovery is not authorized",
+            {"slug": slug, "session_locator": locator},
+        )
     artifacts = state.get("artifacts") if isinstance(state.get("artifacts"), dict) else {}
     output_path = Path(str(artifacts.get("output") or (directory / "output.md"))).expanduser().resolve()
     if not STATE.is_within(STATE.oracle_state_root(), output_path):
@@ -1113,6 +1213,7 @@ def _recover_run_locked(
         recovery_env["ORACLE_LIVE_TERMINAL_TIMEOUT_MS"] = str(
             max(1, round(live_settle_timeout_seconds * 1000))
         )
+    recovery_durability: dict[str, Any] = {}
     try:
         with stdout_path.open("wb") as stdout_handle, stderr_path.open("wb") as stderr_handle:
             process = popen_factory(
@@ -1127,7 +1228,21 @@ def _recover_run_locked(
             )
             exit_code = int(process.wait())
     finally:
-        STATE.cleanup_owned_browser_temp(recovery_browser_temp)
+        try:
+            if stdout_path.is_file():
+                recovery_durability["recovery_stdout"] = STATE.sync_existing_file_durable(
+                    stdout_path, _platform_name=platform_name
+                )
+            if stderr_path.is_file():
+                recovery_durability["recovery_stderr"] = STATE.sync_existing_file_durable(
+                    stderr_path, _platform_name=platform_name
+                )
+        finally:
+            STATE.cleanup_owned_browser_temp(recovery_browser_temp)
+    if argv_output.is_file():
+        recovery_durability["recovery_candidate"] = STATE.sync_existing_file_durable(
+            argv_output, _platform_name=platform_name
+        )
     pre_submit_absence = STATE.settle_pre_submit_session_absent(
         directory / "state.json",
         locator=locator,
@@ -1288,7 +1403,9 @@ def _recover_run_locked(
         and STATE.output_is_nonempty(argv_output)
         and candidate_satisfies_schema
     ):
-        os.replace(argv_output, output_path)
+        recovery_durability["output"] = STATE.promote_file_atomic_durable(
+            argv_output, output_path, _platform_name=platform_name
+        )
     layout = STATE.RunLayout(
         str(state["run_id"]),
         str(oracle.get("slug") or locator),
@@ -1300,7 +1417,7 @@ def _recover_run_locked(
         Path(str(artifacts.get("stderr") or (directory / "stderr.log"))),
         Path(str(artifacts.get("browser_temp") or (directory / "browser-temp"))).resolve(),
     )
-    STATE.write_transcript(layout)
+    recovery_durability["transcript"] = STATE.write_transcript(layout)
     harvested = (
         exit_code == 0
         and observed_session_state in TERMINAL_SESSION_STATES
@@ -1343,7 +1460,11 @@ def _recover_run_locked(
             "terminal_observed" if observed_session_state in TERMINAL_SESSION_STATES else "submitted_unknown"
         ),
         terminal_harvested=harvested,
-        artifact_sha256=STATE.sha256_file(output_path) if harvested else None,
+        artifact_sha256=(
+            str(recovery_durability["output"]["sha256"])
+            if harvested
+            else None
+        ),
         transport_status="complete" if harvested else "incomplete",
         task_outcome=task_outcome,
         task_outcome_reason=(
@@ -1352,6 +1473,7 @@ def _recover_run_locked(
             else task_outcome
         ),
         conversation_url=observed_conversation_url,
+        power_loss_durability=recovery_durability,
     )
     if harvested:
         STATE.cleanup_owned_browser_temp(layout.browser_temp_path)
@@ -1424,7 +1546,12 @@ def adjudicate_task_outcome(
         "output_path": str(output_path),
         "output_sha256": actual,
         "task_outcome": normalized,
-        "safe_for_fresh_retry": normalized == "not_executed",
+        # A provider statement or terminal marker cannot prove that a
+        # write-capable DevSpace session left the workspace unchanged. Only a
+        # separate, hash-bound host mutation proof may authorize fallback; this
+        # generic adjudication never does so by itself.
+        "safe_for_fresh_retry": False,
+        "mutation_free_proof_required": normalized == "not_executed",
         "result": updated,
     }
 
@@ -1619,7 +1746,22 @@ def recover_run(
     sleep: Callable[[float], None] = time.sleep,
 ) -> dict[str, Any]:
     directory = run_dir.expanduser().resolve(strict=True)
+    state_root = STATE.oracle_state_root()
+    if not STATE.is_within(state_root, directory):
+        raise OracleRunError(
+            "RECOVERY_RUN_OUTSIDE_HOST_STATE",
+            "recovery run directory must stay inside the canonical Oracle host state",
+            {"run_dir": str(directory), "state_root": str(state_root)},
+        )
     stored = STATE.load_state(directory / "state.json")
+    STATE.verify_fallback_authority_state(stored)
+    STATE.verify_execution_authority_state(stored)
+    if str(stored.get("run_id") or "") != directory.name:
+        raise OracleRunError(
+            "RECOVERY_RUN_ID_MISMATCH",
+            "recovery directory name must equal the stored run id",
+            {"run_dir": str(directory), "run_id": stored.get("run_id")},
+        )
     project_root = Path(str(stored.get("project_root") or "")).expanduser().resolve(strict=True)
     parallel_parent_id = str(stored.get("parallel_parent_id") or "").strip().casefold()
     if parallel_parent_id and STATE.PARENT_ID_RE.fullmatch(parallel_parent_id) is None:
