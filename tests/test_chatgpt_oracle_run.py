@@ -25,7 +25,7 @@ def installed_custom_oracle(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> 
     cli.write_text("@echo off\n", encoding="utf-8")
     posix_cli.write_text("#!/bin/sh\n", encoding="utf-8")
     (package_root / "package.json").write_text(
-        json.dumps({"name": "@steipete/oracle", "version": "0.17.1-custom.10"}),
+        json.dumps({"name": "@steipete/oracle", "version": "0.17.1-custom.11"}),
         encoding="utf-8",
     )
     monkeypatch.setenv("CODEX_HOME", str(codex_home))
@@ -98,11 +98,11 @@ def pro_readonly_manifest(tmp_path: Path, **extra) -> Path:
 
 
 def version_runner(command, **kwargs):
-    return subprocess.CompletedProcess(command, 0, stdout="oracle 0.17.1-custom.10\n", stderr="")
+    return subprocess.CompletedProcess(command, 0, stdout="oracle 0.17.1-custom.11\n", stderr="")
 
 
 def version_0171_runner(command, **kwargs):
-    return subprocess.CompletedProcess(command, 0, stdout="oracle 0.17.1-custom.10\n", stderr="")
+    return subprocess.CompletedProcess(command, 0, stdout="oracle 0.17.1-custom.11\n", stderr="")
 
 
 def version_timeout_runner(command, **kwargs):
@@ -116,10 +116,10 @@ def test_version_resolution_reads_the_colocated_custom_oracle_version() -> None:
     def slow_valid(command, **kwargs):
         captured["command"] = command
         captured["timeout"] = kwargs["timeout"]
-        return subprocess.CompletedProcess(command, 0, stdout="oracle 0.17.1-custom.10\n", stderr="")
+        return subprocess.CompletedProcess(command, 0, stdout="oracle 0.17.1-custom.11\n", stderr="")
 
     command = [str((Path(os.environ["CODEX_HOME"]) / runner.STATE.ORACLE_CUSTOM_CLI_DIRECTORY / "oracle.cmd").resolve())]
-    assert runner.resolve_oracle_version(command, run_factory=slow_valid) == "oracle 0.17.1-custom.10"
+    assert runner.resolve_oracle_version(command, run_factory=slow_valid) == "oracle 0.17.1-custom.11"
     assert captured == {
         "command": [*command, "--version"],
         "timeout": runner.ORACLE_VERSION_RESOLUTION_TIMEOUT_SECONDS,
@@ -158,7 +158,7 @@ def test_new_oracle_commands_fail_closed_on_missing_or_wrong_custom_package(
     codex_home = tmp_path / ".codex"
     monkeypatch.setenv("CODEX_HOME", str(codex_home))
     shutil.rmtree(codex_home)
-    with pytest.raises(runner.STATE.OracleStateError, match="0.17.1-custom.10"):
+    with pytest.raises(runner.STATE.OracleStateError, match="0.17.1-custom.11"):
         runner.STATE.default_oracle_command(platform_name="nt")
     package_root = codex_home / "mcp_servers/oracle-0.17.1/node_modules/@steipete/oracle"
     cli = codex_home / runner.STATE.ORACLE_CUSTOM_CLI_DIRECTORY / "oracle.cmd"
@@ -169,7 +169,7 @@ def test_new_oracle_commands_fail_closed_on_missing_or_wrong_custom_package(
         json.dumps({"name": "@steipete/oracle", "version": "0.17.1-custom.1"}),
         encoding="utf-8",
     )
-    with pytest.raises(runner.STATE.OracleStateError, match="0.17.1-custom.10"):
+    with pytest.raises(runner.STATE.OracleStateError, match="0.17.1-custom.11"):
         runner.STATE.default_oracle_command(platform_name="nt")
     with pytest.raises(runner.STATE.OracleStateError, match="colocated"):
         runner.STATE.validate_oracle_command(["npx.cmd", "-y", "@steipete/oracle@0.17.0"])
@@ -191,7 +191,7 @@ def test_recovery_allows_only_the_persisted_legacy_command(tmp_path: Path) -> No
     layout = runner.STATE.create_layout(config)
     layout.run_dir.mkdir(parents=True)
     state = runner.STATE.state_payload(
-        config, layout, status="attention_required", resolved_version="oracle 0.17.1-custom.10"
+        config, layout, status="attention_required", resolved_version="oracle 0.17.1-custom.11"
     )
     state["oracle"]["command"] = ["oracle"]
     runner.STATE.write_json_atomic(layout.state_path, state)
@@ -209,9 +209,9 @@ def test_manifest_does_not_relabel_public_npm_integrity_as_custom_package_identi
     payload = json.loads((Path(__file__).resolve().parents[1] / "install-manifest.json").read_text(encoding="utf-8"))
     oracle = payload["external"]["oracle"]
 
-    assert oracle["tested_version"] == "0.17.1-custom.10"
+    assert oracle["tested_version"] == "0.17.1-custom.11"
     assert "integrity" not in oracle
-    assert oracle["artifact_sha256"] == "10B97E6E0B003F184B4F30A7FBBFCA80883A118206BB6D736F12C91584E60ECD"
+    assert oracle["artifact_sha256"] == "21C757C46509421162F15350F58640DDED812ED0A456968B152156FEB0826CF7"
     assert "locally verified custom tarball" in oracle["installation"]
     assert "rather than a public npm registry artifact" in oracle["installation"]
 
@@ -219,7 +219,7 @@ def test_manifest_does_not_relabel_public_npm_integrity_as_custom_package_identi
 def test_new_run_rejects_a_noncustom_oracle_version_before_browser_launch() -> None:
     runner = load_runner()
 
-    with pytest.raises(runner.OracleRunError, match="0.17.1-custom.10") as exc:
+    with pytest.raises(runner.OracleRunError, match="0.17.1-custom.11") as exc:
         runner.require_custom_oracle_version("oracle 0.17.1")
 
     assert exc.value.code == "ORACLE_CUSTOM_VERSION_REQUIRED"
@@ -273,14 +273,14 @@ def test_version_resolution_receives_the_isolated_environment() -> None:
 
     def version(command, **kwargs):
         captured.update(kwargs)
-        return subprocess.CompletedProcess(command, 0, stdout="oracle 0.17.1-custom.10\n", stderr="")
+        return subprocess.CompletedProcess(command, 0, stdout="oracle 0.17.1-custom.11\n", stderr="")
 
     env = {"npm_config_prefix": "isolated"}
     assert runner.resolve_oracle_version(
         ["npx.cmd", "-y", "@steipete/oracle@0.17.1"],
         run_factory=version,
         env=env,
-    ) == "oracle 0.17.1-custom.10"
+    ) == "oracle 0.17.1-custom.11"
     assert captured["env"] is env
 
 
@@ -378,7 +378,7 @@ def cdp_disconnect_pre_submit_popen(session_root: Path, *, variation: str | None
         if variation == "different-error":
             error_message = "Chrome DevTools client disconnected after an unknown browser event."
         lines = [
-            "? oracle 0.17.1-custom.10 deterministic fixture",
+            "? oracle 0.17.1-custom.11 deterministic fixture",
             f"Session: {slug}",
             "Mode: browser foreground",
             "Models: 1",
@@ -479,7 +479,7 @@ def isolated_default_oracle_profile(
 
 def duplicate_prompt_popen(command, **kwargs):
     kwargs["stdout"].write(
-        b'oracle 0.17.1-custom.10\nA session with the same prompt is already running '
+        b'oracle 0.17.1-custom.11\nA session with the same prompt is already running '
         b'(oracle-global-agent-instructio-f39cc47ba5). Reattach with '
         b'"oracle session oracle-global-agent-instructio-f39cc47ba5" or rerun with '
         b'--force to start another run.\n'
@@ -490,7 +490,7 @@ def duplicate_prompt_popen(command, **kwargs):
 
 def copy_profile_manual_login_conflict_popen(command, **kwargs):
     kwargs["stdout"].write(
-        b"oracle 0.17.1-custom.10\n"
+        b"oracle 0.17.1-custom.11\n"
         b"Launching browser mode (gpt-5.6-sol) with 2 files.\n"
         b"ERROR: --copy-profile cannot be combined with --browser-manual-login: choose either a "
         b"throwaway copied profile or the persistent manual-login profile.\n"
@@ -501,7 +501,7 @@ def copy_profile_manual_login_conflict_popen(command, **kwargs):
 
 def profile_copy_rsync_missing_popen(command, **kwargs):
     kwargs["stdout"].write(
-        b"oracle 0.17.1-custom.10\n"
+        b"oracle 0.17.1-custom.11\n"
         b"Session: oracle-test-profile-rsync\n"
         b"Launching browser mode (target=GPT-5.6 Sol; requested=gpt-5.6-sol) with 2 files.\n"
         b"ERROR: --copy-profile requires rsync on PATH (spawn failed): spawn rsync ENOENT\n"
@@ -534,7 +534,7 @@ def manual_login_profile_uninitialized_variant(command, *, variation=None, **kwa
         "If you want to reuse an already signed-in Chrome instead, use --browser-attach-running."
     )
     lines = [
-        "🧿 oracle 0.17.1-custom.10 — Silent run, loud receipts.",
+        "🧿 oracle 0.17.1-custom.11 — Silent run, loud receipts.",
         f"Session: {locator}",
         "Mode: browser foreground",
         "Models: 1",
@@ -560,7 +560,7 @@ def manual_login_profile_uninitialized_variant(command, *, variation=None, **kwa
 
 def thinking_time_selection_unverified_popen(command, **kwargs):
     kwargs["stdout"].write(
-        b"oracle 0.17.1-custom.10\n"
+        b"oracle 0.17.1-custom.11\n"
         b"Session: oracle-test-thinking-time\n"
         b"Launching browser mode (target=GPT-5.6 Sol; requested=gpt-5.6-sol) with 2 files.\n"
         b"ERROR: Thinking time: selection unverified (requested Heavy); "
@@ -574,7 +574,7 @@ def thinking_time_selection_unverified_popen(command, **kwargs):
 
 def thinking_time_unknown_outcome_popen(command, **kwargs):
     kwargs["stdout"].write(
-        b"oracle 0.17.1-custom.10\n"
+        b"oracle 0.17.1-custom.11\n"
         b"Session: oracle-test-thinking-time-unknown\n"
         b"Launching browser mode (target=GPT-5.6 Sol; requested=gpt-5.6-sol) with 2 files.\n"
         b"ERROR: Thinking time: unknown outcome selecting Heavy; "
@@ -889,7 +889,7 @@ def test_complete_requires_zero_exit_and_nonempty_output(tmp_path: Path) -> None
         result = execute_run(runner, manifest(root), run_factory=version_runner, popen_factory=popen_for(code, output, captured, events))
         assert result["ok"] is ok
         assert result["result"]["status"] == status
-        assert result["result"]["oracle"]["resolved_version"] == "oracle 0.17.1-custom.10"
+        assert result["result"]["oracle"]["resolved_version"] == "oracle 0.17.1-custom.11"
         assert "--file" not in captured["command"]
         assert events == ["popen", "wait"]
         assert Path(result["result"]["artifacts"]["transcript"]).is_file()
@@ -1887,7 +1887,7 @@ def test_recovery_no_session_keeps_pre_submit_authority_and_allows_fresh_attempt
     layout.run_dir.mkdir(parents=True)
     runner.STATE.write_json_atomic(
         layout.state_path,
-        runner.STATE.state_payload(config, layout, status="failed", resolved_version="oracle 0.17.1-custom.10"),
+        runner.STATE.state_payload(config, layout, status="failed", resolved_version="oracle 0.17.1-custom.11"),
     )
     for path in (layout.stdout_path, layout.stderr_path):
         path.touch()
@@ -1916,7 +1916,7 @@ def test_recovery_no_session_never_releases_submitted_unknown_run(tmp_path: Path
     config = runner.STATE.load_manifest(manifest(tmp_path, run_id="f" * 32))
     layout = runner.STATE.create_layout(config, run_id=config.requested_run_id)
     layout.run_dir.mkdir(parents=True)
-    state = runner.STATE.state_payload(config, layout, status="attention_required", resolved_version="oracle 0.17.1-custom.10")
+    state = runner.STATE.state_payload(config, layout, status="attention_required", resolved_version="oracle 0.17.1-custom.11")
     state["session_authority"] = "submitted_unknown"
     runner.STATE.write_json_atomic(layout.state_path, state)
     for path in (layout.stdout_path, layout.stderr_path):
@@ -2117,7 +2117,7 @@ def test_standalone_qualified_pro_prompt_timeout_can_be_user_settled_and_unlocks
     assert proof is not None
     assert proof["settlement_eligibility"] == "oracle-standalone-qualified-pro/v1"
     assert proof["transport"] == "pro-devspace-readonly"
-    assert proof["oracle_version"] == "0.17.1-custom.10"
+    assert proof["oracle_version"] == "0.17.1-custom.11"
     assert proof["source_mission_sha256"] == proof["transport_mission_sha256"]
 
 

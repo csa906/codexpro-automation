@@ -194,7 +194,7 @@ def onboarding_plan(
                     "HI",
                 ]
             ),
-            "route_rule": "new Oracle runs require the colocated 0.17.1-custom.10 CLI; public npx and bare oracle are forbidden",
+            "route_rule": "new Oracle runs require the colocated 0.17.1-custom.11 CLI; public npx and bare oracle are forbidden",
         },
         {
             "id": "07_chatgpt_app",

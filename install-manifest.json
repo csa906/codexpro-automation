@@ -1,6 +1,6 @@
 {
   "schema": "codexpro.install-manifest/v1",
-  "version": "1.13.0",
+  "version": "1.13.1",
   "include": [
     "bin/chatgpt_agbrowse_bridge.py",
     "bin/chatgpt_agbrowse_composer.py",
@@ -155,10 +155,10 @@
     },
     "oracle": {
       "package": "@steipete/oracle",
-      "tested_version": "0.17.1-custom.10",
+      "tested_version": "0.17.1-custom.11",
       "license": "MIT",
-      "artifact_sha256": "10B97E6E0B003F184B4F30A7FBBFCA80883A118206BB6D736F12C91584E60ECD",
-      "installation": "colocated custom CLI/MCP at mcp_servers/oracle-0.17.1, installed from the locally verified custom tarball rather than a public npm registry artifact; new runs require its @steipete/oracle package identity to resolve exactly to 0.17.1-custom.10 and runtime patch hashes to match"
+      "artifact_sha256": "21C757C46509421162F15350F58640DDED812ED0A456968B152156FEB0826CF7",
+      "installation": "colocated custom CLI/MCP at mcp_servers/oracle-0.17.1, installed from the locally verified custom tarball rather than a public npm registry artifact; new runs require its @steipete/oracle package identity to resolve exactly to 0.17.1-custom.11 and runtime patch hashes to match"
     },
     "devspace": {
       "package": "@waishnav/devspace",

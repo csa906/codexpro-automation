@@ -194,7 +194,7 @@ $oracle = Join-Path $codexHome 'mcp_servers/oracle-0.17.1/node_modules/.bin/orac
 ```
 
 `$oracle`은 설치된 `@steipete/oracle` package version이 정확히
-`0.17.1-custom.10`인 colocated CLI여야 합니다. 새 실행에는 public `npx` 또는 bare
+`0.17.1-custom.11`인 colocated CLI여야 합니다. 새 실행에는 public `npx` 또는 bare
 `oracle`를 사용하지 않으며, 누락되거나 버전이 다르면 doctor와 새 실행이 fail closed합니다.
 
 열린 전용 브라우저에서 ChatGPT 로그인만 완료합니다. 이후 실제 실행은 이 프로필의

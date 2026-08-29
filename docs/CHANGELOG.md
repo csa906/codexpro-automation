@@ -1,5 +1,15 @@
 # 기술 변경 기록
 
+## 1.13.1 - GPT-5.6 Sol Power 5 선택기 호환성
+
+- Oracle을 `0.17.1-custom.11`로 갱신하고, 현재 분리형 모델 선택기에서 같은
+  메뉴의 정확한 `Pro, 5 of 5` 슬라이더와 체크된 `GPT-5.6 Sol` 라디오를
+  결합해 검증합니다.
+- 과거 `Model GPT-5.6 Sol / Effort Pro` 결합 표시는 계속 허용하지만, Power 5와
+  다른 모델이 선택된 경우는 제출 전 `selection-unverified`로 거부합니다.
+- custom tarball, `thinkingTime.js`, 설치 매니페스트와 런타임 허용 버전을 새
+  SHA-256 계약으로 고정했습니다.
+
 ## 1.13.0 - 첫 설치와 DevSpace 진단 완결
 
 - 기존 DevSpace 설정의 root 병합, Windows 재부팅 root 영속성, Unicode root의

@@ -1086,7 +1086,7 @@ def _recover_run_locked(
     if not STATE.is_within(STATE.oracle_state_root(), output_path):
         raise OracleRunError("RECOVERY_OUTPUT_OUTSIDE_HOST_STATE", "recovery output must remain inside host-only Oracle state")
     stored_command = oracle.get("command")
-    # Persisted sessions may have been submitted before the custom.10-only
+    # Persisted sessions may have been submitted before the current custom-only
     # new-run policy. Only their recorded command is recovery-only authority;
     # a caller-supplied override must satisfy the current strict new-run route.
     command = STATE.validate_oracle_command(

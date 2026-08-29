@@ -96,7 +96,7 @@ if (!$GitBash) {
 }
 $OracleCli = Join-Path $CodexRoot 'mcp_servers/oracle-0.17.1/node_modules/.bin/oracle.cmd'
 $OraclePackage = Join-Path $CodexRoot 'mcp_servers/oracle-0.17.1/node_modules/@steipete/oracle/package.json'
-$OracleExpectedVersion = '0.17.1-custom.10'
+$OracleExpectedVersion = '0.17.1-custom.11'
 if (!(Test-Path -LiteralPath $OracleCli -PathType Leaf)) {
   $Issues += @{code='ORACLE_CUSTOM_CLI_MISSING'; path=$OracleCli}
 }

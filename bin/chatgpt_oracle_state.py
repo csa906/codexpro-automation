@@ -105,7 +105,7 @@ ORACLE_CDP_DISCONNECT_PRE_SUBMIT_ERROR = (
     "Chrome DevTools client disconnected before oracle finished; "
     "the browser target appears still alive."
 )
-ORACLE_CUSTOM_PACKAGE_VERSION = "0.17.1-custom.10"
+ORACLE_CUSTOM_PACKAGE_VERSION = "0.17.1-custom.11"
 ORACLE_STANDALONE_PRO_NO_SUBMISSION_VERSIONS = {ORACLE_CUSTOM_PACKAGE_VERSION}
 ORACLE_CUSTOM_CLI_DIRECTORY = Path("mcp_servers/oracle-0.17.1/node_modules/.bin")
 USER_CONFIRMED_NO_SUBMISSION = "user-confirmed-no-submission"
@@ -1791,7 +1791,12 @@ def proven_pre_submit_manual_login_profile_uninitialized(
     prefix_lines = lines[:-2]
     if len(prefix_lines) != 11:
         return None
-    banner_ok = bool(re.fullmatch(r".{1,4} oracle 0\.17\.1-custom\.10 .{2,120}", prefix_lines[0]))
+    banner_ok = bool(
+        re.fullmatch(
+            rf".{{1,4}} oracle {re.escape(ORACLE_CUSTOM_PACKAGE_VERSION)} .{{2,120}}",
+            prefix_lines[0],
+        )
+    )
     launch_ok = bool(
         re.fullmatch(
             r"Launching browser mode \(target=GPT-5\.6 Sol; requested=gpt-5\.6-sol\) "
@@ -1910,7 +1915,10 @@ def proven_pre_submit_cdp_disconnect(state_path: Path) -> dict[str, Any] | None:
     if len(lines) != 13 or lines[-2:] != failure_lines:
         return None
     if not (
-        re.fullmatch(r".{1,4} oracle 0\.17\.1-custom\.10 .{2,120}", lines[0])
+        re.fullmatch(
+            rf".{{1,4}} oracle {re.escape(ORACLE_CUSTOM_PACKAGE_VERSION)} .{{2,120}}",
+            lines[0],
+        )
         and lines[1] == f"Session: {locator}"
         and lines[2:6]
         == [
@@ -2039,7 +2047,9 @@ def proven_pre_submit_host_failure(state_path: Path) -> dict[str, Any] | None:
     # Oracle prints this version banner before validating local attachments;
     # it is not browser/session evidence.  Any other stdout remains fail-closed.
     stdout_text = stdout_bytes.decode("utf-8", errors="replace").strip()
-    attachment_limit_banner_only = stdout_text == "🧿 oracle 0.17.1-custom.10 — Questions in, clarity out."
+    attachment_limit_banner_only = (
+        stdout_text == f"🧿 oracle {ORACLE_CUSTOM_PACKAGE_VERSION} — Questions in, clarity out."
+    )
     if stdout_text and not attachment_limit_banner_only:
         return None
     try:

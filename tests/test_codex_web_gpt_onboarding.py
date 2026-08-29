@@ -39,7 +39,7 @@ def test_plan_orders_the_complete_first_install_without_secrets(tmp_path: Path) 
     dumped = json.dumps(plan)
     assert "owner_token" not in dumped.casefold()
     assert "--browser-manual-login" in dumped
-    assert "0.17.1-custom.10" in dumped
+    assert "0.17.1-custom.11" in dumped
     assert "@steipete/oracle@0.17.1" not in dumped
     assert "DEVSPACE_OAUTH_SCOPES" in dumped
 

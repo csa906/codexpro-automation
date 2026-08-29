@@ -14,6 +14,23 @@ REFERENCE_FOOTER_FIXTURE = (
 )
 
 
+@pytest.fixture(autouse=True)
+def installed_custom_oracle(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    codex_home = tmp_path / ".codex"
+    package_root = codex_home / "mcp_servers/oracle-0.17.1/node_modules/@steipete/oracle"
+    cli = codex_home / "mcp_servers/oracle-0.17.1/node_modules/.bin/oracle.cmd"
+    posix_cli = codex_home / "mcp_servers/oracle-0.17.1/node_modules/.bin/oracle"
+    package_root.mkdir(parents=True, exist_ok=True)
+    cli.parent.mkdir(parents=True, exist_ok=True)
+    cli.write_text("@echo off\n", encoding="utf-8")
+    posix_cli.write_text("#!/bin/sh\n", encoding="utf-8")
+    (package_root / "package.json").write_text(
+        json.dumps({"name": "@steipete/oracle", "version": "0.17.1-custom.11"}),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("CODEX_HOME", str(codex_home))
+
+
 def load_state():
     name = "chatgpt_oracle_state_test"
     spec = importlib.util.spec_from_file_location(name, STATE_PATH)
@@ -22,6 +39,19 @@ def load_state():
     sys.modules[name] = module
     spec.loader.exec_module(module)
     return module
+
+
+def custom_oracle_command(platform_name: str = "nt") -> list[str]:
+    cli_name = "oracle.cmd" if platform_name == "nt" else "oracle"
+    return [
+        str(
+            (
+                Path(os.environ["CODEX_HOME"])
+                / "mcp_servers/oracle-0.17.1/node_modules/.bin"
+                / cli_name
+            ).resolve()
+        )
+    ]
 
 
 def test_v1_task_outcome_accepts_exact_provider_reference_footer(tmp_path: Path) -> None:
@@ -68,7 +98,7 @@ def manifest(tmp_path: Path, mission_path: Path | str, **extra) -> Path:
         "mission_path": str(mission_path),
         "app_name": "DevSpace",
         "mode": "browser",
-        "oracle_command": ["oracle"],
+        "oracle_command": custom_oracle_command(),
     }
     value.update(extra)
     path = tmp_path / "job.json"
@@ -365,7 +395,10 @@ def test_default_profile_copy_is_skipped_when_the_copy_dependency_is_absent(
     monkeypatch.setenv("ORACLE_BROWSER_PROFILE_DIR", str(seed.resolve()))
     monkeypatch.setattr(state.shutil, "which", lambda name: None)
 
-    config = state.load_manifest(manifest(tmp_path, mission.resolve()), platform_name="posix")
+    config = state.load_manifest(
+        manifest(tmp_path, mission.resolve(), oracle_command=custom_oracle_command("posix")),
+        platform_name="posix",
+    )
 
     assert config.copy_profile is None
 
@@ -385,7 +418,10 @@ def test_default_profile_copy_is_used_when_the_copy_dependency_exists(
         lambda name: "/usr/bin/rsync" if name == state.PROFILE_COPY_DEPENDENCY else None,
     )
 
-    config = state.load_manifest(manifest(tmp_path, mission.resolve()), platform_name="posix")
+    config = state.load_manifest(
+        manifest(tmp_path, mission.resolve(), oracle_command=custom_oracle_command("posix")),
+        platform_name="posix",
+    )
 
     assert config.copy_profile == seed.resolve()
 
@@ -435,7 +471,12 @@ def test_explicit_profile_copy_fails_closed_without_the_copy_dependency(
 
     with pytest.raises(state.OracleStateError) as exc:
         state.load_manifest(
-            manifest(tmp_path, mission.resolve(), copy_profile=str(seed.resolve())),
+            manifest(
+                tmp_path,
+                mission.resolve(),
+                copy_profile=str(seed.resolve()),
+                oracle_command=custom_oracle_command("posix"),
+            ),
             platform_name="posix",
         )
 

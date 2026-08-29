@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Any, Sequence
 
 SUPPORTED_VERSION = "0.17.1"
-CUSTOM_SUPPORTED_VERSION = "0.17.1-custom.10"
+CUSTOM_SUPPORTED_VERSION = "0.17.1-custom.11"
 CREATE_NO_WINDOW = 0x08000000
 # Retained only to document the old package lineage.  New work validates and
 # patches the published 0.17.1 package below; 0.16.1 is not accepted anymore.
@@ -215,7 +215,7 @@ CUSTOM_FILE_CONTRACTS = {
         # This artifact contains qualified GPT-5.6 Sol Power 5 proof that is
         # intentionally absent from the public 0.17.1 package. Never replace
         # it with the public compatibility output.
-        "required": "e98f56450ccd88caae4ad616ee0a5208981a52f2ac48fa58ab157a345786ec01",
+        "required": "779bea9db562c4a068b16e60726289033354d96ba3ea4eb457be9fce5de94ced",
         "custom_only": True,
     },
 }
